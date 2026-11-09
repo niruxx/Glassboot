@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Shell scripts and GRUB configs must stay LF even on Windows checkouts.
+*.sh  text eol=lf
+*.cfg text eol=lf
+*.env text eol=lf
+# Files consumed by Windows PE must be CRLF.
+*.cmd text eol=crlf
+*.ini text eol=crlf
