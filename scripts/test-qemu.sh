@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boot a BIOS-USB image in QEMU as a USB stick.
+# Boot a Glassboot image in QEMU as a USB stick.
 #
 #   scripts/test-qemu.sh bios|uefi [IMAGE] [-- extra qemu args]
 #   scripts/add-iso.sh IMAGE some.iso      # copy ISOs onto the image first
@@ -10,7 +10,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 fw="${1:-}"; shift || true
-img="${1:-$ROOT/out/biosusb.img}"; [[ $# -gt 0 ]] && shift
+img="${1:-$ROOT/out/glassboot.img}"; [[ $# -gt 0 ]] && shift
 [[ "${1:-}" == "--" ]] && shift
 
 [[ -f "$img" ]] || { echo "no image: $img (run scripts/mkusb.sh --image $img)" >&2; exit 1; }

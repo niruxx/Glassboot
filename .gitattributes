@@ -7,3 +7,4 @@
 # Files consumed by Windows PE must be CRLF.
 *.cmd text eol=crlf
 *.ini text eol=crlf
+*.xml text eol=crlf

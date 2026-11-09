@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build all BIOS-USB boot components from pinned upstream source.
+# Build all Glassboot boot components from pinned upstream source.
 #
 #   out/grub/      GRUB tools + modules for i386-pc (BIOS), x86_64-efi and i386-efi
 #   out/wimboot/   wimboot (BIOS + x86_64 UEFI) and wimboot.i386.efi
@@ -12,8 +12,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/versions.env"
 
 # Build on the Linux filesystem: building on /mnt/c (WSL drvfs) is slow and breaks symlinks.
-BUILD="${BIOSUSB_BUILD_DIR:-/var/tmp/biosusb-build}"
-OUT="${BIOSUSB_OUT_DIR:-$ROOT/out}"
+BUILD="${GLASSBOOT_BUILD_DIR:-/var/tmp/glassboot-build}"
+OUT="${GLASSBOOT_OUT_DIR:-$ROOT/out}"
 JOBS="$(nproc)"
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -36,6 +36,19 @@ build_grub() {
 
   rm -rf "$src"
   tar -C "$BUILD" -xf "$tar"
+
+  # Add the Glassboot module (boot/grub-module/glassboot.c) as an ordinary GRUB module,
+  # then regenerate the build system so it is compiled for every platform.
+  log "Adding the glassboot GRUB module"
+  cp "$ROOT/boot/grub-module/glassboot.c" "$src/grub-core/commands/glassboot.c"
+  cat >> "$src/grub-core/Makefile.core.def" <<'EOF'
+
+module = {
+  name = glassboot;
+  common = commands/glassboot.c;
+};
+EOF
+  (cd "$src" && ./autogen.sh >/dev/null)
 
   rm -rf "$OUT/grub"
   # target:platform pairs. All three install into the same prefix; grub-install then
@@ -79,11 +92,64 @@ build_wimboot() {
   cp "$src/COPYING"* "$OUT/wimboot/" 2>/dev/null || true
 }
 
+# The initrd hook (hook/glassboot-hook.c): a static x86_64 binary packed as a newc cpio
+# that GRUB appends to a distribution's initrd. Fixed mtimes keep the cpio reproducible.
+build_hook() {
+  log "Building initrd hook"
+  local stage="$BUILD/hook-stage"
+  rm -rf "$stage" "$OUT/hook"
+  mkdir -p "$stage/glassboot/proc" "$stage/glassboot/sys" "$stage/glassboot/dev" "$OUT/hook"
+  gcc -std=c11 -O2 -Wall -Wextra -Wno-format-truncation -static -s -o "$stage/glassboot/init" "$ROOT/hook/glassboot-hook.c"
+  find "$stage" -exec touch -h -d @0 {} +
+  (cd "$stage" && find glassboot | LC_ALL=C sort | cpio --quiet -o -H newc --reproducible --owner=0:0) \
+    > "$OUT/hook/glassboot-hook-x86_64.cpio"
+  ls -l "$OUT/hook/"
+}
+
+# Windows PE helper (win-helper/): attaches the chosen ISO as a virtual DVD so Windows
+# Setup can find install.wim. Built for x64 and x86 WinPE with MinGW-w64.
+build_winhelper() {
+  log "Building Windows PE helper"
+  rm -rf "$OUT/winhelper"
+  mkdir -p "$OUT/winhelper"
+  x86_64-w64-mingw32-gcc -municode -O2 -Wall -s -o "$OUT/winhelper/glassboot-attach.exe" \
+    "$ROOT/win-helper/glassboot-attach.c" -lvirtdisk
+  i686-w64-mingw32-gcc -municode -O2 -Wall -s -o "$OUT/winhelper/glassboot-attach32.exe" \
+    "$ROOT/win-helper/glassboot-attach.c" -lvirtdisk
+  ls -l "$OUT/winhelper/"
+}
+
+# memdisk (from syslinux): boots disk images and small ISOs from RAM on Legacy BIOS.
+build_memdisk() {
+  local tar="$BUILD/syslinux-$SYSLINUX_VERSION.tar.xz" src="$BUILD/syslinux-$SYSLINUX_VERSION"
+  mkdir -p "$BUILD"
+  if [[ ! -f "$tar" ]]; then
+    log "Downloading syslinux $SYSLINUX_VERSION"
+    curl -fL --proto '=https' -o "$tar.part" \
+      "https://mirrors.edge.kernel.org/pub/linux/utils/boot/syslinux/syslinux-$SYSLINUX_VERSION.tar.xz"
+    mv "$tar.part" "$tar"
+  fi
+  log "Verifying syslinux source"
+  echo "$SYSLINUX_SHA256  $tar" | sha256sum -c -
+  rm -rf "$src"
+  tar -C "$BUILD" -xf "$tar"
+  log "Building memdisk"
+  make -s -C "$src" bios -j"$JOBS" > "$BUILD/syslinux-build.log" 2>&1 || true
+  [[ -f "$src/bios/memdisk/memdisk" ]] || { tail -20 "$BUILD/syslinux-build.log"; exit 1; }
+  rm -rf "$OUT/memdisk"
+  mkdir -p "$OUT/memdisk"
+  cp "$src/bios/memdisk/memdisk" "$src/COPYING" "$OUT/memdisk/"
+  ls -l "$OUT/memdisk/"
+}
+
 case "${1:-all}" in
-  grub)    build_grub ;;
-  wimboot) build_wimboot ;;
-  all)     build_grub; build_wimboot ;;
-  *) echo "usage: $0 [grub|wimboot|all]" >&2; exit 2 ;;
+  grub)      build_grub ;;
+  wimboot)   build_wimboot ;;
+  hook)      build_hook ;;
+  winhelper) build_winhelper ;;
+  memdisk)   build_memdisk ;;
+  all)       build_grub; build_wimboot; build_hook; build_winhelper; build_memdisk ;;
+  *) echo "usage: $0 [grub|wimboot|hook|winhelper|memdisk|all]" >&2; exit 2 ;;
 esac
 
 log "Done. Outputs in $OUT"

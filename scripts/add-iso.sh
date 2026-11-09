@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copy ISO files onto the data partition of a BIOS-USB disk image (for QEMU testing).
-# On a real USB stick you don't need this: just drag the ISOs onto the BIOSUSB drive.
+# Copy ISO files onto the data partition of a Glassboot disk image (for QEMU testing).
+# On a real USB stick you don't need this: just drag the ISOs onto the GLASSBOOT drive.
 #
 #   scripts/add-iso.sh IMAGE file.iso [more.iso ...]
 set -euo pipefail
