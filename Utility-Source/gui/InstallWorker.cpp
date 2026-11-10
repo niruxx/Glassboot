@@ -4,8 +4,8 @@
 
 namespace glassboot {
 
-InstallWorker::InstallWorker(DiskInfo disk, Payload payload, bool update)
-    : disk_(std::move(disk)), payload_(std::move(payload)), update_(update) {}
+InstallWorker::InstallWorker(DiskInfo disk, Payload payload, bool update, InstallOptions options)
+    : disk_(std::move(disk)), payload_(std::move(payload)), update_(update), options_(options) {}
 
 void InstallWorker::run() {
     try {
@@ -29,7 +29,7 @@ void InstallWorker::run() {
         };
         cb.log = [&](const std::string& line) { emit logLine(QString::fromStdString(line)); };
         if (update_) update(*dev, payload_, cb, cancel_);
-        else install(*dev, payload_, cb, cancel_);
+        else install(*dev, payload_, cb, cancel_, options_);
         emit finished(true, QString());
     } catch (const std::exception& e) {
         emit finished(false, QString::fromStdString(e.what()));

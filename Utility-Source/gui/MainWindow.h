@@ -11,6 +11,8 @@
 #include <vector>
 
 class QLabel;
+class QComboBox;
+class QSpinBox;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
@@ -66,6 +68,8 @@ private:
     bool busy_ = false;
 
     QTreeWidget* list_ = nullptr;
+    QComboBox* partitionStyle_ = nullptr;
+    QSpinBox* reserve_ = nullptr;
     QLabel* hiddenNote_ = nullptr;
     QLabel* notice_ = nullptr;
     QLabel* status_ = nullptr;

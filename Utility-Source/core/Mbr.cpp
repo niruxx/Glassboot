@@ -46,18 +46,19 @@ void partEntry(uint8_t* e, bool active, uint8_t type, uint32_t start, uint32_t c
 
 } // namespace
 
-Layout Layout::compute(uint64_t diskBytes, uint32_t espMb) {
+Layout Layout::compute(uint64_t diskBytes, uint32_t espMb, uint64_t reserveBytes) {
     Layout l;
     l.totalSectors = diskBytes / 512;
     // MBR can address at most 2^32 sectors (2 TiB). Larger sticks use the first 2 TiB.
-    uint64_t usable = std::min<uint64_t>(l.totalSectors, 0xFFFFFFFFull);
+    if (reserveBytes > diskBytes) throw Error("reserved space exceeds disk size");
+    uint64_t usable = std::min<uint64_t>((diskBytes - reserveBytes) / 512, 0xFFFFFFFFull);
     l.espSectors = espMb * kMiB;
     l.dataStart = kMiB;
     uint64_t minData = 256ull * kMiB; // 256 MiB
     if (usable < l.dataStart + minData + l.espSectors)
         throw Error("the disk is too small (at least " + std::to_string(espMb + 257) + " MiB needed)");
     uint64_t dataSectors = (usable - l.dataStart - l.espSectors) / kMiB * kMiB;
-    l.dataSectors = uint32_t(dataSectors);
+    l.dataSectors = dataSectors;
     l.espStart = l.dataStart + l.dataSectors;
     return l;
 }

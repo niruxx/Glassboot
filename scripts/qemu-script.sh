@@ -49,6 +49,10 @@ keyname() {
     '=') echo equal ;; '~') echo shift-grave_accent ;; ',') echo comma ;;
     "'") echo apostrophe ;; '"') echo shift-apostrophe ;; '&') echo shift-7 ;;
     '$') echo shift-4 ;; '(') echo shift-9 ;; ')') echo shift-0 ;; '\') echo backslash ;;
+    '%') echo shift-5 ;; '@') echo shift-2 ;; '!') echo shift-1 ;; '#') echo shift-3 ;;
+    '^') echo shift-6 ;; '*') echo shift-8 ;; '+') echo shift-equal ;; '?') echo shift-slash ;;
+    '[') echo bracket_left ;; ']') echo bracket_right ;; '{') echo shift-bracket_left ;;
+    '}') echo shift-bracket_right ;;
     *) echo "unsupported character '$c'" >&2 ;;
   esac
 }

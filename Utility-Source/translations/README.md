@@ -28,3 +28,9 @@ removed are marked obsolete.
 
 Building translations needs Qt's Linguist tools (`qt6-l10n-tools` and `qt6-tools-dev` on
 Debian/Ubuntu). Without them the installer builds in English only.
+
+Spanish (`glassboot_es.ts`) is included. The installer chooses it from the system locale.
+The boot menu has its own language setting: `language = es` in `glassboot.cfg`, or
+**Settings > Menu > Boot menu language**. Its gettext source is `boot/locale/es.po`;
+`build-payload.sh` compiles the catalog with `msgfmt`. Configuration keys, ISO menu
+contents, operating-system names and low-level diagnostic messages are not translated.

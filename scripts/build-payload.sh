@@ -32,7 +32,7 @@ mkdir -p "$PAYLOAD"
 
 # Modules embedded in every core image: just enough to read the ESP and run the
 # early config. Everything else is loaded from /boot/grub/<platform>/ on the ESP.
-CORE_MODS="part_msdos fat search search_label test regexp configfile echo normal"
+CORE_MODS="part_gpt part_msdos fat search search_label test regexp configfile echo normal"
 
 # ---------------------------------------------------------------- BIOS core.img
 # At boot $root is the BIOS boot drive, e.g. "hd0". The ESP is always partition 2.
@@ -56,6 +56,7 @@ core_size=$(stat -c %s "$PAYLOAD/core.img")
 (( core_size <= 2047 * 512 )) || { echo "core.img too large: $core_size" >&2; exit 1; }
 
 # ---------------------------------------------------------------- ESP tree
+command -v msgfmt >/dev/null || { echo "gettext (msgfmt) missing" >&2; exit 1; }
 log "Staging ESP"
 ESP="$STAGE/esp"
 mkdir -p "$ESP/EFI/BOOT" "$ESP/boot/grub" "$ESP/boot/glassboot/win"
@@ -70,7 +71,14 @@ for plat in i386-pc x86_64-efi i386-efi; do
   mkdir -p "$ESP/boot/grub/$plat"
   cp "$GRUB/lib/grub/$plat/"*.mod "$GRUB/lib/grub/$plat/"*.lst "$ESP/boot/grub/$plat/"
 done
-cp "$ROOT/boot/grub/"*.cfg "$ESP/boot/grub/"
+for cfg in "$ROOT/boot/grub/"*.cfg; do
+  # A Windows checkout may have CRLF; GRUB configuration requires Unix lines.
+  sed 's/\r$//' "$cfg" > "$ESP/boot/grub/$(basename "$cfg")"
+done
+mkdir -p "$ESP/boot/grub/locale"
+for po in "$ROOT/boot/locale/"*.po; do
+  msgfmt --check -o "$ESP/boot/grub/locale/$(basename "${po%.po}").mo" "$po"
+done
 # $prefix/fonts/unicode.pf2, as a normal GRUB install has: ISO menus that run inside our
 # GRUB (e.g. Debian's "loadfont unicode") need it, or every character shows as a box.
 # Made with our own grub-mkfont from GNU Unifont (GPL; package fonts-unifont).
@@ -79,6 +87,8 @@ UNIFONT=/usr/share/fonts/opentype/unifont/unifont.otf
 mkdir -p "$ESP/boot/grub/fonts"
 "$GRUB/bin/grub-mkfont" -s 16 -o "$ESP/boot/grub/fonts/unicode.pf2" "$UNIFONT"
 cp "$ROOT/boot/win/"* "$ESP/boot/glassboot/win/"
+# BCD template for booting Windows from a VHD/VHDX (patched at boot by gb_vhd_bcd).
+python3 "$ROOT/scripts/make-bcd.py" "$ESP/boot/glassboot/win/bcd-vhd"
 if [[ -f "$OUT/wimboot/wimboot" ]]; then
   cp "$OUT/wimboot/wimboot" "$ESP/boot/glassboot/"
   [[ -f "$OUT/wimboot/wimboot.i386.efi" ]] && cp "$OUT/wimboot/wimboot.i386.efi" "$ESP/boot/glassboot/"

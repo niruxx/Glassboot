@@ -57,6 +57,7 @@ private:
     QSpinBox* timeout_ = nullptr;
     QComboBox* default_ = nullptr;
     QComboBox* view_ = nullptr;
+    QComboBox* language_ = nullptr;
     QLineEdit* theme_ = nullptr;
     QLabel* passwordState_ = nullptr;
     QPushButton* passwordRemove_ = nullptr;

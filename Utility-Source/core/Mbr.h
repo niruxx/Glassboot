@@ -14,10 +14,10 @@ namespace glassboot {
 //   p2  espStart         FAT16 EFI System Partition, type 0xEF
 struct Layout {
     uint64_t totalSectors = 0;
-    uint32_t dataStart = 0, dataSectors = 0;
-    uint32_t espStart = 0, espSectors = 0;
+    uint64_t dataStart = 0, dataSectors = 0;
+    uint64_t espStart = 0, espSectors = 0;
 
-    static Layout compute(uint64_t diskBytes, uint32_t espMb); // throws Error
+    static Layout compute(uint64_t diskBytes, uint32_t espMb, uint64_t reserveBytes = 0); // throws Error
 };
 
 // Build sector 0: boot code from GRUB's boot.img (patched to load core.img from LBA 1),

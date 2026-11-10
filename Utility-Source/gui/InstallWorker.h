@@ -1,6 +1,7 @@
 #pragma once
 #include "BlockDevice.h"
 #include "Payload.h"
+#include "Installer.h"
 
 #include <QObject>
 #include <QString>
@@ -18,7 +19,7 @@ class InstallWorker : public QObject {
     Q_OBJECT
 public:
     // update: refresh boot files only (keeps the data partition) instead of a full install.
-    InstallWorker(DiskInfo disk, Payload payload, bool update = false);
+    InstallWorker(DiskInfo disk, Payload payload, bool update = false, InstallOptions options = {});
     void cancel() { cancel_ = true; }
 
 public slots:
@@ -33,6 +34,7 @@ private:
     DiskInfo disk_;
     Payload payload_;
     bool update_;
+    InstallOptions options_;
     std::atomic<bool> cancel_{false};
 };
 

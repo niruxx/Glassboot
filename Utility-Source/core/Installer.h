@@ -30,7 +30,8 @@ std::string incompatibility(const DiskInfo& disk, uint32_t espMb = kDefaultEspMb
 struct ExistingInstall {
     bool found = false;
     std::string version; // "0.1.x (no marker)" for drives made before markers existed
-    uint32_t dataStart = 0, dataSectors = 0, espStart = 0, espSectors = 0;
+    uint64_t dataStart = 0, dataSectors = 0, espStart = 0, espSectors = 0;
+    bool gpt = false;
 };
 
 // Look for Glassboot on `dev` (reads a few sectors; never writes).
@@ -52,6 +53,11 @@ void update(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb
 //   4. formats the exFAT data partition
 // Throws Error on failure. Setting `cancel` aborts between steps (the stick is then
 // left unusable until the installer is run again).
-void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel);
+struct InstallOptions {
+    bool gpt = false; // UEFI-only; MBR remains the default for Legacy BIOS.
+    uint64_t reserveBytes = 0; // unallocated space after the ESP (before backup GPT)
+};
+void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel,
+             const InstallOptions& options = {});
 
 } // namespace glassboot

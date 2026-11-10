@@ -187,6 +187,31 @@ glassboot-cli update --device /dev/sdX                # refresh boot files, keep
 * **Installer packaging:** an MSI or zip for Windows, and an AppImage or `.deb` for Linux.
 * **Persistence files on Windows:** they need an ext4 file system, and the installer
   can't create one there yet.
-* **Translations:** the infrastructure is in place, but no languages exist yet.
+* **Additional translations:** Spanish is included; more languages can be added in `translations/`.
 * **Fuller exFAT up-case table:** currently covers Latin, Greek and Cyrillic.
-* **4Kn disk support,** and GPT as an option alongside MBR.
+* **4Kn disk support:** the installer still requires 512-byte logical sectors.
+
+## GPT and reserved space
+
+The GUI offers **Partition table** and **Reserve at end of disk** for fresh installs.
+MBR remains the default and supports BIOS plus UEFI. GPT is **UEFI only**, supports
+full capacity above 2 TiB, and uses primary and backup GPT tables with CRC checks.
+Both layouts currently require 512-byte logical sectors. Secure Boot is not supported.
+
+```sh
+glassboot-cli install --image /tmp/glassboot-gpt.img --size 4G --gpt --reserve 512M
+glassboot-cli install --device /dev/sdX --gpt --reserve 1G
+```
+
+These install commands erase the target. Reserved space is unallocated space after the
+EFI partition; GPT's backup table stays at the physical end of the disk. `Update`
+automatically detects either layout and preserves it, including reserved space and
+additional partitions. Layout options apply to fresh installs, not updates.
+
+Run the core and layout checks with `ctest --test-dir BUILD_DIR --output-on-failure`.
+On Linux as root, `tests/platform-image-test.sh BUILD_DIR` also checks temporary MBR,
+GPT and 3 TiB images, both filesystems, the Linux hook, and preservation during update.
+
+`tests/menu-qemu-test.sh BUILD_DIR` boots BIOS/MBR, UEFI/MBR and a sparse 3 TiB
+UEFI/GPT image and asserts menu behavior through serial output. See
+[Phase 3/4 validation](../docs/PHASE3-4-VALIDATION.md) for scope and limitations.

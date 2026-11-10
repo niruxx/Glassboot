@@ -13,7 +13,7 @@
  * worker and immediately exec the real /init, so the distribution boots normally. The
  * worker, in its own mount namespace (it never touches the distribution's mounts):
  *
- *   1. waits for the USB disk whose MBR signature and partition number match
+ *   1. waits for the USB disk whose MBR signature/partition number or GPT partition GUID matches
  *      glassboot.part (it appears once the distribution's udev loads the USB drivers),
  *   2. reads the exFAT file system on that partition and finds the ISO's clusters,
  *   3. maps those sectors as a read-only block device: a loop device with offset + size
@@ -107,6 +107,26 @@ static char opt_iso[4096];
 static char opt_persist[4096]; /* optional persistence file (glassboot.cfg "persist") */
 static uint32_t opt_sig;
 static unsigned opt_partnum;
+static uint8_t opt_guid[16];
+static int opt_gpt;
+
+/* UUID strings use big-endian fields; GPT stores the first three little-endian. */
+static int parse_guid(const char *text, uint8_t out[16]) {
+    static const unsigned order[16] = {3,2,1,0,5,4,7,6,8,9,10,11,12,13,14,15};
+    if (strlen(text) != 36) return -1;
+    unsigned at = 0;
+    for (unsigned i = 0; i < 36;) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (text[i++] != '-') return -1;
+        } else {
+            if (!isxdigit((unsigned char)text[i]) || !isxdigit((unsigned char)text[i+1])) return -1;
+            char hex[3] = {text[i], text[i+1], 0};
+            out[order[at++]] = (uint8_t)strtoul(hex, NULL, 16);
+            i += 2;
+        }
+    }
+    return 0;
+}
 
 static void percent_decode(char *s) {
     char *o = s;
@@ -135,12 +155,20 @@ static int parse_cmdline(void) {
             snprintf(opt_persist, sizeof opt_persist, "%s", tok + 18);
             percent_decode(opt_persist);
         } else if (!strncmp(tok, "glassboot.part=", 15)) {
-            /* GRUB msdos part-uuid: "<8 hex disk signature>-<2 hex partition number>" */
-            char *dash = strchr(tok + 15, '-');
-            if (dash) {
-                opt_sig = (uint32_t)strtoul(tok + 15, NULL, 16);
-                opt_partnum = (unsigned)strtoul(dash + 1, NULL, 16);
+            const char *uuid = tok + 15;
+            if (parse_guid(uuid, opt_guid) == 0) {
+                opt_gpt = 1;
                 have_part = 1;
+            } else if (strlen(uuid) == 11 && uuid[8] == '-') {
+                int valid = 1;
+                for (int i = 0; i < 11; i++)
+                    if (i != 8 && !isxdigit((unsigned char)uuid[i])) valid = 0;
+                if (valid) {
+                    opt_sig = (uint32_t)strtoul(uuid, NULL, 16);
+                    opt_partnum = (unsigned)strtoul(uuid + 9, NULL, 16);
+                    opt_gpt = 0;
+                    have_part = opt_partnum >= 1 && opt_partnum <= 4;
+                }
             }
         }
     }
@@ -223,6 +251,38 @@ static int open_devnode(const char *name, int flags) {
     return open(p, flags | O_CLOEXEC);
 }
 
+static uint64_t le64(const uint8_t *p);
+static uint32_t le32(const uint8_t *p);
+static int preadn(int fd, void *buf, size_t len, uint64_t off);
+static uint32_t gpt_crc(const uint8_t *p, size_t n) {
+    uint32_t c = ~0u;
+    while (n--) {
+        c ^= *p++;
+        for (int i = 0; i < 8; i++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1)));
+    }
+    return ~c;
+}
+/* Match the unique partition GUID, never the disk GUID or a filesystem label. */
+static int gpt_partition(int fd, const uint8_t *guid, unsigned pn, uint64_t *start, uint64_t *len) {
+    uint8_t header[512], entries[128 * 128];
+    if (preadn(fd, header, sizeof header, 512) != 0 || memcmp(header, "EFI PART", 8) ||
+        le32(header + 12) != 92 || le64(header + 24) != 1 || le64(header + 72) != 2 ||
+        le32(header + 80) != 128 || le32(header + 84) != 128) return -1;
+    uint32_t sum = le32(header + 16);
+    memset(header + 16, 0, 4);
+    if (gpt_crc(header, 92) != sum || preadn(fd, entries, sizeof entries, 1024) != 0 ||
+        gpt_crc(entries, sizeof entries) != le32(header + 88)) return -1;
+    for (unsigned i = 0; i < 128; i++) {
+        const uint8_t *e = entries + i * 128;
+        if (guid ? memcmp(e + 16, guid, 16) != 0 : i + 1 != pn) continue;
+        uint64_t first = le64(e + 32), last = le64(e + 40);
+        if (first < le64(header + 40) || last < first || last > le64(header + 48)) return -1;
+        *start = first; *len = last - first + 1;
+        return 0;
+    }
+    return -1;
+}
+
 static int find_disk(struct disk *out) {
     DIR *d = opendir(SYS "/block");
     if (!d) return -1;
@@ -236,6 +296,19 @@ static int find_disk(struct disk *out) {
         int fd = open_devnode(n, O_RDONLY);
         if (fd < 0) continue;
         uint8_t mbr[512];
+        if (opt_gpt) {
+            uint64_t start, len;
+            struct stat st;
+            if (gpt_partition(fd, opt_guid, 0, &start, &len) == 0 && fstat(fd, &st) == 0) {
+                snprintf(out->name, sizeof out->name, "%s", n);
+                out->fd = fd; out->devnum = st.st_rdev;
+                out->part_start = start; out->part_len = len;
+                found = 0;
+                continue;
+            }
+            close(fd);
+            continue;
+        }
         if (pread(fd, mbr, 512, 0) == 512 && mbr[510] == 0x55 && mbr[511] == 0xAA) {
             uint32_t sig = (uint32_t)mbr[0x1B8] | (uint32_t)mbr[0x1B9] << 8 | (uint32_t)mbr[0x1BA] << 16 |
                            (uint32_t)mbr[0x1BB] << 24;
@@ -707,7 +780,7 @@ static void worker(void) {
         _exit(1);
 
     if (parse_cmdline() != 0) { logmsg("missing glassboot.iso / glassboot.part\n"); _exit(1); }
-    logmsg("looking for %s on disk %08x partition %u\n", opt_iso, opt_sig, opt_partnum);
+    logmsg("looking for %s (%s partition identifier)\n", opt_iso, opt_gpt ? "GPT" : "MBR");
 
     struct disk disk;
     int tries = 0;
@@ -768,8 +841,13 @@ static int test_mode(int argc, char **argv) {
     uint8_t mbr[512];
     if (fd < 0 || preadn(fd, mbr, 512, 0) != 0) { perror(argv[2]); return 1; }
     unsigned pn = (unsigned)atoi(argv[3]);
-    if (pn < 1 || pn > 4) return 2;
-    uint32_t start = le32(mbr + 0x1BE + 16 * (pn - 1) + 8);
+    uint64_t start = 0, plen = 0;
+    if (mbr[450] == 0xEE) {
+        if (pn < 1 || pn > 128 || gpt_partition(fd, NULL, pn, &start, &plen) != 0) return 2;
+    } else {
+        if (pn < 1 || pn > 4) return 2;
+        start = le32(mbr + 0x1BE + 16 * (pn - 1) + 8);
+    }
     struct exfat fs;
     struct runs runs = {0};
     uint64_t size = 0;

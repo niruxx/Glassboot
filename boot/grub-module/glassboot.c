@@ -28,7 +28,10 @@
  */
 
 #include <grub/command.h>
+#include <grub/acpi.h>
 #include <grub/device.h>
+#include <grub/disk.h>
+#include <grub/partition.h>
 #include <grub/dl.h>
 #include <grub/env.h>
 #include <grub/err.h>
@@ -108,8 +111,9 @@ sbuf_add_quoted (struct sbuf *b, const char *s)
  *   hide    /path/folder-or-file
  *   args    /path/file.iso = extra kernel arguments
  *   persist /path/file.iso = /path/persistence.dat
+ *   dud     /path/file.iso = /path/driver-disk.iso   (may repeat; Linux driver update disks)
  */
-enum { CFG_ALIAS, CFG_HIDE, CFG_ARGS, CFG_PERSIST };
+enum { CFG_ALIAS, CFG_HIDE, CFG_ARGS, CFG_PERSIST, CFG_DUD, CFG_CLASS };
 
 struct cfg_item
 {
@@ -267,12 +271,16 @@ grub_cmd_gb_config (grub_command_t cmd __attribute__ ((unused)), int argc, char 
 	type = CFG_ARGS;
       else if (grub_strcasecmp (key, "persist") == 0)
 	type = CFG_PERSIST;
+      else if (grub_strcasecmp (key, "class") == 0)
+	type = CFG_CLASS;
+      else if (grub_strcasecmp (key, "dud") == 0)
+	type = CFG_DUD;
 
       if (type < 0)
 	{
 	  if (grub_strcasecmp (key, "timeout") == 0 || grub_strcasecmp (key, "default") == 0
 	      || grub_strcasecmp (key, "view") == 0 || grub_strcasecmp (key, "theme") == 0
-	      || grub_strcasecmp (key, "password") == 0)
+	      || grub_strcasecmp (key, "password") == 0 || grub_strcasecmp (key, "language") == 0)
 	    {
 	      char lower[16];
 	      grub_size_t k;
@@ -312,7 +320,8 @@ grub_cmd_gb_config (grub_command_t cmd __attribute__ ((unused)), int argc, char 
       *eq = 0;
       cfg_items[cfg_nitems].type = type;
       cfg_items[cfg_nitems].path = norm_path (trim (rest));
-      cfg_items[cfg_nitems].value = type == CFG_PERSIST ? norm_path (trim (eq + 1)) : grub_strdup (trim (eq + 1));
+      cfg_items[cfg_nitems].value = (type == CFG_PERSIST || type == CFG_DUD) ? norm_path (trim (eq + 1))
+				    : grub_strdup (trim (eq + 1));
       cfg_nitems++;
     }
   grub_free (buf);
@@ -373,7 +382,7 @@ bootable_kind (const char *name)
     return GB_KIND_WIM;
   if (efi && has_suffix (name, ".efi"))
     return GB_KIND_EFI;
-  if (has_suffix (name, ".img") || has_suffix (name, ".vhd"))
+  if (has_suffix (name, ".img") || has_suffix (name, ".vhd") || has_suffix (name, ".vhdx"))
     return GB_KIND_IMG;
   return GB_KIND_NONE;
 }
@@ -532,7 +541,12 @@ emit_entry (struct sbuf *menu, const struct iso_entry *e, const char *indent, in
   sbuf_add (menu, "    [");
   sbuf_add (menu, size);
   sbuf_add (menu, "]\" --class ");
-  sbuf_add (menu, kind_class[e->kind]);
+  {
+    const char *cls = cfg_lookup (CFG_CLASS, e->path);
+    sbuf_add (menu, "\"");
+    sbuf_add_quoted (menu, cls && *cls ? cls : kind_class[e->kind]);
+    sbuf_add (menu, "\"");
+  }
   sbuf_add (menu, " --id \"gb:");
   sbuf_add_quoted (menu, e->path);
   sbuf_add (menu, "\" \"");
@@ -651,6 +665,16 @@ static struct grub_procfs_entry menu_entry = {
   .get_contents = menu_get_contents
 };
 
+static int
+contains_ci (const char *text, const char *query)
+{
+  grub_size_t n = grub_strlen (query);
+  for (; *text; text++)
+    if (grub_strncasecmp (text, query, n) == 0)
+      return 1;
+  return n == 0;
+}
+
 static grub_err_t
 grub_cmd_gb_scan (grub_command_t cmd __attribute__ ((unused)), int argc, char **argv)
 {
@@ -662,8 +686,8 @@ grub_cmd_gb_scan (grub_command_t cmd __attribute__ ((unused)), int argc, char **
   struct sbuf menu = { 0 };
   char count[32];
 
-  if (argc != 1)
-    return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("usage: gb_scan (DEVICE)"));
+  if (argc < 1 || argc > 2)
+    return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("usage: gb_scan (DEVICE) [FILTER]"));
 
   len = grub_strlen (argv[0]);
   if (len >= 2 && argv[0][0] == '(' && argv[0][len - 1] == ')')
@@ -691,6 +715,20 @@ grub_cmd_gb_scan (grub_command_t cmd __attribute__ ((unused)), int argc, char **
   ctx.devname = devname;
   scan_dir (&ctx, dev, fs, "/", 0);
   grub_device_close (dev);
+
+  if (argc == 2 && argv[1][0])
+    {
+      grub_size_t kept = 0;
+      for (i = 0; i < ctx.count; i++)
+        {
+          const char *alias = cfg_lookup (CFG_ALIAS, ctx.isos[i].path);
+          if (contains_ci (ctx.isos[i].path, argv[1]) || (alias && contains_ci (alias, argv[1])))
+            ctx.isos[kept++] = ctx.isos[i];
+          else
+            grub_free (ctx.isos[i].path);
+        }
+      ctx.count = kept;
+    }
 
   /* Sizes (opening a file is just a directory lookup). */
   for (i = 0; i < ctx.count; i++)
@@ -1091,6 +1129,42 @@ grub_cmd_gb_hook_enable (grub_command_t cmd __attribute__ ((unused)), int argc, 
 	}
       grub_free (dir);
       grub_free (own);
+
+      /* glassboot.cfg "dud": Linux driver update disks. GRUB's "newc:NAME:FILE" initrd
+	 syntax puts each file into the initramfs as /glassboot-dud/N.<ext>, and
+	 inst.dd=/glassboot-dud/N.<ext> makes Anaconda (Fedora, RHEL, Rocky, Alma, ...)
+	 apply it at once: a path that exists in the initramfs needs no device. */
+      {
+	int n = 0, c;
+	for (c = 0; c < cfg_nitems; c++)
+	  {
+	    const char *file = cfg_items[c].value, *dot;
+	    char ext[8] = "iso", *path, *initrd;
+	    grub_size_t k;
+	    if (cfg_items[c].type != CFG_DUD || grub_strcasecmp (cfg_items[c].path, argv[0]) != 0)
+	      continue;
+	    if (hook_ninitrds >= HOOK_MAX_INITRDS || hook_nargs >= HOOK_MAX_ARGS)
+	      break;
+	    path = grub_xasprintf ("%s%s", argv[3], file);
+	    if (!path || !file_exists (path))
+	      {
+		grub_printf ("glassboot.cfg: driver update disk %s not found\n", file);
+		grub_free (path);
+		continue;
+	      }
+	    dot = grub_strrchr (file, '.');
+	    if (dot && grub_strlen (dot + 1) < sizeof (ext) && !grub_strchr (dot, '/'))
+	      for (k = 0; k <= grub_strlen (dot + 1); k++)
+		ext[k] = grub_tolower (dot[1 + k]);
+	    initrd = grub_xasprintf ("newc:glassboot-dud/%d.%s:%s", n, ext, path);
+	    grub_free (path);
+	    if (!initrd)
+	      break;
+	    hook_initrds[hook_ninitrds++] = initrd;
+	    hook_args[hook_nargs++] = grub_xasprintf ("inst.dd=/glassboot-dud/%d.%s", n, ext);
+	    n++;
+	  }
+      }
     }
   install_wrappers ();
   hook_enabled = 1;
@@ -1103,6 +1177,750 @@ grub_cmd_gb_hook_disable (grub_command_t cmd __attribute__ ((unused)),
 {
   hook_enabled = 0;
   return GRUB_ERR_NONE;
+}
+
+/* ------------------------------------------------------------------ disk image files */
+/*
+ * Reads the virtual disk inside an image file: raw (.img, .iso), VHD (fixed or dynamic)
+ * and VHDX. Formats: Microsoft "Virtual Hard Disk Image Format Specification" (VHD) and
+ * "[MS-VHDX]". Read-only. Differencing disks (which need their parent) and VHDX files
+ * with an unreplayed log are refused with a message.
+ */
+enum { VIMG_RAW, VIMG_VHD_FIXED, VIMG_VHD_DYNAMIC, VIMG_VHDX };
+static const char *const vimg_names[] = { "raw", "vhd-fixed", "vhd-dynamic", "vhdx" };
+
+struct vimg
+{
+  grub_file_t file;
+  int fmt;
+  grub_uint64_t size;        /* virtual disk size in bytes */
+  grub_uint32_t block_size;  /* dynamic formats: bytes per block */
+  grub_uint32_t nbat;
+  grub_uint64_t *bat;        /* file offset of each block's data, 0 = not allocated */
+  int dirty;                 /* VHDX with an unreplayed log */
+};
+
+static grub_uint32_t
+vimg_crc32c (const grub_uint8_t *p, grub_size_t n)
+{
+  grub_uint32_t crc = 0xffffffff;
+  int k;
+  while (n--)
+    {
+      crc ^= *p++;
+      for (k = 0; k < 8; k++)
+	crc = (crc >> 1) ^ (0x82f63b78 & -(crc & 1));
+    }
+  return ~crc;
+}
+
+static int
+vimg_vhd_checksum (const grub_uint8_t *p, grub_size_t n, grub_size_t field)
+{
+  grub_uint32_t sum = 0;
+  grub_size_t i;
+  for (i = 0; i < n; i++)
+    if (i < field || i >= field + 4)
+      sum += p[i];
+  return ~sum == grub_be_to_cpu32 (grub_get_unaligned32 (p + field));
+}
+
+static grub_err_t
+vimg_pread (struct vimg *v, grub_uint64_t off, void *buf, grub_size_t len)
+{
+  grub_uint64_t size = grub_file_size (v->file);
+  if (off > size || len > size - off)
+    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "disk image contains an out-of-range file offset");
+  grub_file_seek (v->file, off);
+  if (grub_file_read (v->file, buf, len) != (grub_ssize_t) len)
+    return grub_errno ? grub_errno : grub_error (GRUB_ERR_FILE_READ_ERROR, "short read in disk image");
+  return GRUB_ERR_NONE;
+}
+
+static void
+vimg_close (struct vimg *v)
+{
+  if (v->file)
+    grub_file_close (v->file);
+  grub_free (v->bat);
+  grub_memset (v, 0, sizeof (*v));
+}
+
+static grub_err_t
+vimg_open_vhd_dynamic (struct vimg *v, const grub_uint8_t *footer)
+{
+  grub_uint8_t hdr[1024];
+  grub_uint64_t table;
+  grub_uint32_t i, bitmap, *raw;
+
+  if (vimg_pread (v, grub_be_to_cpu64 (grub_get_unaligned64 (footer + 16)), hdr, sizeof (hdr)))
+    return grub_errno;
+  if (grub_memcmp (hdr, "cxsparse", 8) != 0 || !vimg_vhd_checksum (hdr, sizeof (hdr), 36))
+    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHD: no dynamic disk header");
+  table = grub_be_to_cpu64 (grub_get_unaligned64 (hdr + 16));
+  v->nbat = grub_be_to_cpu32 (grub_get_unaligned32 (hdr + 28));
+  v->block_size = grub_be_to_cpu32 (grub_get_unaligned32 (hdr + 32));
+  if (v->block_size < 512 || (v->block_size & (v->block_size - 1)) || v->nbat == 0 || v->nbat > (1U << 24))
+    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHD: unsupported block size or table");
+  /* Each block starts with a sector bitmap (one bit per sector, padded to 512 bytes). */
+  bitmap = ALIGN_UP ((v->block_size / 512 + 7) / 8, 512);
+  if (!v->size || grub_divmod64 (v->size - 1, v->block_size, 0) >= v->nbat)
+    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHD: block table does not cover virtual disk");
+  raw = grub_calloc (v->nbat, 4);
+  v->bat = grub_calloc (v->nbat, 8);
+  if (!raw || !v->bat || vimg_pread (v, table, raw, (grub_size_t) v->nbat * 4))
+    {
+      grub_free (raw);
+      return grub_errno;
+    }
+  for (i = 0; i < v->nbat; i++)
+    {
+      grub_uint32_t e = grub_be_to_cpu32 (raw[i]);
+      v->bat[i] = e == 0xffffffff ? 0 : (grub_uint64_t) e * 512 + bitmap;
+      if (v->bat[i] && (v->bat[i] > grub_file_size (v->file)
+          || v->block_size > grub_file_size (v->file) - v->bat[i]))
+        {
+          grub_free (raw);
+          return grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHD: allocated block outside file");
+        }
+    }
+  grub_free (raw);
+  return GRUB_ERR_NONE;
+}
+
+static grub_err_t
+vimg_open_vhdx (struct vimg *v)
+{
+  static const grub_uint8_t bat_guid[16] =
+    { 0x66, 0x77, 0xc2, 0x2d, 0x23, 0xf6, 0x00, 0x42, 0x9d, 0x64, 0x11, 0x5e, 0x9b, 0xfd, 0x4a, 0x08 };
+  static const grub_uint8_t meta_guid[16] =
+    { 0x06, 0xa2, 0x7c, 0x8b, 0x90, 0x47, 0x9a, 0x4b, 0xb8, 0xfe, 0x57, 0x5f, 0x05, 0x0f, 0x88, 0x6e };
+  static const grub_uint8_t params_guid[16] =
+    { 0x37, 0x67, 0xa1, 0xca, 0x36, 0xfa, 0x43, 0x4d, 0xb3, 0xb6, 0x33, 0xf0, 0xaa, 0x44, 0xe7, 0x6b };
+  static const grub_uint8_t size_guid[16] =
+    { 0x24, 0x42, 0xa5, 0x2f, 0x1b, 0xcd, 0x76, 0x48, 0xb2, 0x11, 0x5d, 0xbe, 0xd8, 0x3b, 0xf4, 0xb8 };
+  static const grub_uint8_t lss_guid[16] =
+    { 0x1d, 0xbf, 0x41, 0x81, 0x6f, 0xa9, 0x09, 0x47, 0xba, 0x47, 0xf2, 0x33, 0xa8, 0xfa, 0xab, 0x5f };
+  grub_uint8_t *buf, *hdr = NULL, zero[16] = { 0 };
+  grub_uint64_t best_seq = 0, bat_off = 0, meta_off = 0, chunk, bat_entries, i;
+  grub_uint32_t meta_len = 0, bat_len = 0, lss = 0, n, k;
+  grub_err_t err = GRUB_ERR_NONE;
+
+  buf = grub_malloc (65536);
+  if (!buf)
+    return grub_errno;
+
+  /* Two headers (at 64 KiB and 128 KiB): use the valid one with the higher sequence. */
+  for (k = 1; k <= 2; k++)
+    {
+      grub_uint8_t h[4096];
+      grub_uint32_t crc;
+      if (vimg_pread (v, (grub_uint64_t) k * 65536, h, sizeof (h)))
+	goto fail;
+      if (grub_memcmp (h, "head", 4) != 0)
+	continue;
+      crc = grub_get_unaligned32 (h + 4);
+      grub_set_unaligned32 (h + 4, 0);
+      if (vimg_crc32c (h, sizeof (h)) != grub_le_to_cpu32 (crc))
+	continue;
+      if (grub_le_to_cpu16 (grub_get_unaligned16 (h + 66)) != 1)
+        continue;
+      if (!hdr || grub_le_to_cpu64 (grub_get_unaligned64 (h + 8)) > best_seq)
+	{
+	  best_seq = grub_le_to_cpu64 (grub_get_unaligned64 (h + 8));
+	  grub_memcpy (buf, h, 128);
+	  hdr = buf;
+	}
+    }
+  if (!hdr)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: no valid header");
+      goto fail;
+    }
+  /* Reading stale allocation metadata can return incorrect boot files. Only Windows
+     can replay the log; never expose such a disk through either GRUB or EFI. */
+  v->dirty = grub_memcmp (hdr + 48, zero, 16) != 0;
+  if (v->dirty)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: unreplayed log; attach and cleanly detach the disk in Windows first");
+      goto fail;
+    }
+
+  /* Independently checksummed redundant region tables. */
+  for (k = 3; k <= 4; k++)
+    {
+      grub_uint32_t crc;
+      if (vimg_pread (v, (grub_uint64_t) k * 65536, buf, 65536))
+        goto fail;
+      crc = grub_le_to_cpu32 (grub_get_unaligned32 (buf + 4));
+      grub_set_unaligned32 (buf + 4, 0);
+      if (!grub_memcmp (buf, "regi", 4) && vimg_crc32c (buf, 65536) == crc)
+        break;
+    }
+  if (k == 5)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: no region table");
+      goto fail;
+    }
+  n = grub_le_to_cpu32 (grub_get_unaligned32 (buf + 8));
+  if (n > 2047)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: invalid region entry count");
+      goto fail;
+    }
+  for (k = 0; k < n && k < 2047; k++)
+    {
+      grub_uint8_t *e = buf + 16 + 32 * k;
+      if (grub_memcmp (e, bat_guid, 16) == 0)
+        {
+	  bat_off = grub_le_to_cpu64 (grub_get_unaligned64 (e + 16));
+          bat_len = grub_le_to_cpu32 (grub_get_unaligned32 (e + 24));
+        }
+      else if (grub_memcmp (e, meta_guid, 16) == 0)
+	{
+	  meta_off = grub_le_to_cpu64 (grub_get_unaligned64 (e + 16));
+	  meta_len = grub_le_to_cpu32 (grub_get_unaligned32 (e + 24));
+	}
+      else if (grub_le_to_cpu32 (grub_get_unaligned32 (e + 28)) & 1)
+        {
+          err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: unknown required region");
+          goto fail;
+        }
+    }
+  if (!bat_off || !meta_off || meta_len < 65536 || !bat_len
+      || bat_off > grub_file_size (v->file) || bat_len > grub_file_size (v->file) - bat_off
+      || meta_off > grub_file_size (v->file) || meta_len > grub_file_size (v->file) - meta_off)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: block table or metadata missing");
+      goto fail;
+    }
+
+  /* Metadata: block size, parent flag, virtual size, logical sector size. */
+  if (vimg_pread (v, meta_off, buf, 65536))
+    goto fail;
+  if (grub_memcmp (buf, "metadata", 8) != 0)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: bad metadata table");
+      goto fail;
+    }
+  n = grub_le_to_cpu16 (grub_get_unaligned16 (buf + 10));
+  if (n > 2047)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: invalid metadata entry count");
+      goto fail;
+    }
+  for (k = 0; k < n; k++)
+    {
+      grub_uint8_t *e = buf + 32 + 32 * k, item[8];
+      grub_uint32_t off = grub_le_to_cpu32 (grub_get_unaligned32 (e + 16));
+      grub_uint32_t length = grub_le_to_cpu32 (grub_get_unaligned32 (e + 20));
+      if (grub_memcmp (e, params_guid, 16) && grub_memcmp (e, size_guid, 16) && grub_memcmp (e, lss_guid, 16))
+	continue;
+      if (length < (grub_memcmp (e, lss_guid, 16) ? 8U : 4U)
+          || off < 65536 || off > meta_len || length > meta_len - off)
+        {
+          err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: invalid metadata item bounds");
+          goto fail;
+        }
+      grub_memset (item, 0, sizeof (item));
+      if (vimg_pread (v, meta_off + off, item, grub_memcmp (e, lss_guid, 16) ? 8 : 4))
+	goto fail;
+      if (grub_memcmp (e, params_guid, 16) == 0)
+	{
+	  v->block_size = grub_le_to_cpu32 (grub_get_unaligned32 (item));
+	  if (grub_le_to_cpu32 (grub_get_unaligned32 (item + 4)) & 2)
+	    {
+	      err = grub_error (GRUB_ERR_BAD_FILE_TYPE,
+				"VHDX: differencing disks are not supported (merge it into its parent)");
+	      goto fail;
+	    }
+	}
+      else if (grub_memcmp (e, size_guid, 16) == 0)
+	v->size = grub_le_to_cpu64 (grub_get_unaligned64 (item));
+      else
+	lss = grub_le_to_cpu32 (grub_get_unaligned32 (item));
+    }
+  if (lss != 512)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: only 512-byte logical sectors are supported");
+      goto fail;
+    }
+  if (v->block_size < (1U << 20) || v->block_size > (256U << 20) || (v->block_size & (v->block_size - 1))
+      || v->size == 0)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: unsupported block size");
+      goto fail;
+    }
+
+  /* Block table: after every CHUNK payload entries comes one sector-bitmap entry. */
+  chunk = grub_divmod64 ((grub_uint64_t) 1 << 23, v->block_size / lss, 0);
+  {
+    grub_uint64_t blocks = grub_divmod64 (v->size - 1, v->block_size, 0) + 1;
+    if (blocks > (1U << 24))
+      {
+	err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: disk too large");
+	goto fail;
+      }
+    v->nbat = (grub_uint32_t) blocks;
+  }
+  bat_entries = v->nbat + grub_divmod64 (v->nbat, chunk, 0) + 1;
+  if (bat_entries * 8 > bat_len)
+    {
+      err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: block table does not cover virtual disk");
+      goto fail;
+    }
+  v->bat = grub_calloc (v->nbat, 8);
+  {
+    grub_uint64_t *raw = grub_calloc (bat_entries, 8);
+    if (!raw || !v->bat || vimg_pread (v, bat_off, raw, bat_entries * 8))
+      {
+	grub_free (raw);
+	goto fail;
+      }
+    for (i = 0; i < v->nbat; i++)
+      {
+	grub_uint64_t e = grub_le_to_cpu64 (raw[i + grub_divmod64 (i, chunk, 0)]);
+	grub_uint32_t state = e & 7;
+	/* Partially present blocks require parent/bitmap semantics. Reserved states
+           must not silently turn into zeros. */
+        if (state == 4 || state == 5 || state == 7)
+          {
+            grub_free (raw);
+            err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: unsupported payload block state");
+            goto fail;
+          }
+	v->bat[i] = state == 6 ? (e >> 20) << 20 : 0;
+        if (state == 6 && (!v->bat[i] || v->bat[i] > grub_file_size (v->file)
+            || v->block_size > grub_file_size (v->file) - v->bat[i]))
+          {
+            grub_free (raw);
+            err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: allocated block outside file");
+            goto fail;
+          }
+      }
+    grub_free (raw);
+  }
+  grub_free (buf);
+  return GRUB_ERR_NONE;
+
+ fail:
+  grub_free (buf);
+  return err ? err : (grub_errno ? grub_errno : grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHDX: cannot read"));
+}
+
+/* Open PATH and work out its format from its contents (not its name). */
+static grub_err_t
+vimg_open (struct vimg *v, const char *path)
+{
+  grub_uint8_t footer[512], sig[8];
+  grub_uint64_t fsize;
+
+  grub_memset (v, 0, sizeof (*v));
+  v->file = grub_file_open (path, GRUB_FILE_TYPE_LOOPBACK | GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (!v->file)
+    return grub_errno;
+  fsize = grub_file_size (v->file);
+  v->size = fsize;
+  v->fmt = VIMG_RAW;
+
+  if (fsize >= 1024 * 1024 && vimg_pread (v, 0, sig, 8) == GRUB_ERR_NONE
+      && grub_memcmp (sig, "vhdxfile", 8) == 0)
+    {
+      v->fmt = VIMG_VHDX;
+      v->size = 0;
+      if (vimg_open_vhdx (v))
+	goto fail;
+      return GRUB_ERR_NONE;
+    }
+  grub_errno = GRUB_ERR_NONE;
+
+  if (fsize >= 1024 && vimg_pread (v, fsize - 512, footer, 512) == GRUB_ERR_NONE
+      && grub_memcmp (footer, "conectix", 8) == 0)
+    {
+      grub_uint32_t type = grub_be_to_cpu32 (grub_get_unaligned32 (footer + 60));
+      if (!vimg_vhd_checksum (footer, sizeof (footer), 64))
+        {
+          grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHD: invalid footer checksum");
+          goto fail;
+        }
+      v->size = grub_be_to_cpu64 (grub_get_unaligned64 (footer + 48));
+      if (type == 2)
+	{
+	  v->fmt = VIMG_VHD_FIXED;
+	  if (!v->size || v->size > fsize - 512)
+            {
+              grub_error (GRUB_ERR_BAD_FILE_TYPE, "VHD: truncated fixed disk");
+              goto fail;
+            }
+	}
+      else if (type == 3)
+	{
+	  v->fmt = VIMG_VHD_DYNAMIC;
+	  if (vimg_open_vhd_dynamic (v, footer))
+	    goto fail;
+	}
+      else
+	{
+	  grub_error (GRUB_ERR_BAD_FILE_TYPE,
+		      "VHD: differencing disks are not supported (merge it into its parent)");
+	  goto fail;
+	}
+    }
+  if (v->fmt == VIMG_RAW && (has_suffix (path, ".vhd") || has_suffix (path, ".vhdx")))
+    {
+      grub_error (GRUB_ERR_BAD_FILE_TYPE, "invalid or truncated VHD/VHDX container");
+      goto fail;
+    }
+  grub_errno = GRUB_ERR_NONE;
+  return GRUB_ERR_NONE;
+
+ fail:
+  {
+    grub_err_t e = grub_errno ? grub_errno : GRUB_ERR_BAD_FILE_TYPE;
+    char msg[GRUB_MAX_ERRMSG];
+    grub_strncpy (msg, grub_errmsg, sizeof (msg) - 1);
+    msg[sizeof (msg) - 1] = 0;
+    grub_errno = GRUB_ERR_NONE;
+    vimg_close (v);
+    return grub_error (e, "%s: %s", path, msg);
+  }
+}
+
+/* Read LEN bytes of the virtual disk at OFF. Unallocated blocks read as zeros. */
+static grub_err_t
+vimg_read (struct vimg *v, grub_uint64_t off, grub_size_t len, void *buf)
+{
+  grub_uint8_t *out = buf;
+  if (off > v->size || len > v->size - off)
+    return grub_error (GRUB_ERR_OUT_OF_RANGE, "read beyond the end of the disk image");
+  if (v->fmt == VIMG_RAW || v->fmt == VIMG_VHD_FIXED)
+    return vimg_pread (v, off, buf, len);
+  while (len)
+    {
+      grub_uint64_t in;
+      grub_uint64_t blk = grub_divmod64 (off, v->block_size, &in);
+      grub_size_t n = v->block_size - in;
+      if (n > len)
+	n = len;
+      if (v->fmt == VIMG_VHD_DYNAMIC && blk < v->nbat && v->bat[blk])
+        {
+          grub_uint8_t bits;
+          grub_uint32_t bitmap = ALIGN_UP ((v->block_size / 512 + 7) / 8, 512);
+          grub_uint64_t sector = in / 512;
+          if (n > 512 - (in & 511))
+            n = 512 - (in & 511);
+          if (vimg_pread (v, v->bat[blk] - bitmap + sector / 8, &bits, 1))
+            return grub_errno;
+          if (!(bits & (0x80 >> (sector & 7))))
+            {
+              grub_memset (out, 0, n);
+              out += n;
+              off += n;
+              len -= n;
+              continue;
+            }
+        }
+      if (blk >= v->nbat || !v->bat[blk])
+	grub_memset (out, 0, n);
+      else if (vimg_pread (v, v->bat[blk] + in, out, n))
+	return grub_errno;
+      out += n;
+      off += n;
+      len -= n;
+    }
+  return GRUB_ERR_NONE;
+}
+
+/*
+ * gb_vdisk FILE  /  gb_vdisk
+ *
+ * Make the disk inside FILE (raw, VHD or VHDX) available as the GRUB device (gbvd), so
+ * GRUB's partition and file system drivers can read it, e.g. "ls (gbvd,gpt3)/". Sets
+ * gb_vdisk_format. Without arguments, removes it.
+ */
+static struct vimg gbvd_img;
+static unsigned long gbvd_generation;
+
+static int
+gbvd_iterate (grub_disk_dev_iterate_hook_t hook, void *hook_data, grub_disk_pull_t pull)
+{
+  if (pull != GRUB_DISK_PULL_NONE || !gbvd_img.file)
+    return 0;
+  return hook ("gbvd", hook_data);
+}
+
+static grub_err_t
+gbvd_open (const char *name, grub_disk_t disk)
+{
+  if (grub_strcmp (name, "gbvd") != 0 || !gbvd_img.file)
+    return grub_error (GRUB_ERR_UNKNOWN_DEVICE, "not a Glassboot virtual disk");
+  disk->total_sectors = gbvd_img.size >> GRUB_DISK_SECTOR_BITS;
+  disk->max_agglomerate = 1048576 >> (GRUB_DISK_SECTOR_BITS + GRUB_DISK_CACHE_BITS);
+  disk->id = gbvd_generation; /* a new id per image, so the disk cache never mixes them */
+  disk->data = &gbvd_img;
+  return GRUB_ERR_NONE;
+}
+
+static void
+gbvd_close (grub_disk_t disk __attribute__ ((unused)))
+{
+}
+
+static grub_err_t
+gbvd_read (grub_disk_t disk, grub_disk_addr_t sector, grub_size_t size, char *buf)
+{
+  return vimg_read (disk->data, sector << GRUB_DISK_SECTOR_BITS, size << GRUB_DISK_SECTOR_BITS, buf);
+}
+
+static grub_err_t
+gbvd_write (grub_disk_t disk __attribute__ ((unused)), grub_disk_addr_t sector __attribute__ ((unused)),
+	    grub_size_t size __attribute__ ((unused)), const char *buf __attribute__ ((unused)))
+{
+  return grub_error (GRUB_ERR_WRITE_ERROR, "the Glassboot virtual disk is read-only");
+}
+
+static struct grub_disk_dev gbvd_dev = {
+  .name = "gbvd",
+  /* Only GRUB's host utilities use the hostdisk id; firmware builds never register it. */
+  .id = GRUB_DISK_DEVICE_HOSTDISK_ID,
+  .disk_iterate = gbvd_iterate,
+  .disk_open = gbvd_open,
+  .disk_close = gbvd_close,
+  .disk_read = gbvd_read,
+  .disk_write = gbvd_write,
+  .next = 0
+};
+
+/* Sets gb_vdisk_windows to the first partition holding Windows' boot loader. */
+static int
+gbvd_find_windows (grub_disk_t disk __attribute__ ((unused)), const grub_partition_t p,
+		   void *data __attribute__ ((unused)))
+{
+  char *part = grub_partition_get_name (p), *dev, *f1, *f2;
+  int found = 0;
+  if (!part)
+    return 0;
+  dev = grub_xasprintf ("(gbvd,%s)", part);
+  f1 = grub_xasprintf ("%s/Windows/System32/winload.exe", dev);
+  f2 = grub_xasprintf ("%s/Windows/System32/winload.efi", dev);
+  if (dev && f1 && f2 && (file_exists (f1) || file_exists (f2)))
+    {
+      /* Windows' own record of its setup state. "GENERALIZE_RESEAL": never started
+	 (a freshly applied image); "UNDEPLOYABLE": its first start failed. */
+      char *ini = grub_xasprintf ("%s/Windows/Setup/State/State.ini", dev);
+      const char *state = "ready";
+      grub_file_t sf = ini ? grub_file_open (ini, GRUB_FILE_TYPE_CONFIG | GRUB_FILE_TYPE_NO_DECOMPRESS) : NULL;
+      if (sf)
+	{
+	  char buf[513];
+	  grub_ssize_t n = grub_file_read (sf, buf, sizeof (buf) - 1);
+	  grub_file_close (sf);
+	  if (n > 0)
+	    {
+	      grub_ssize_t j;
+	      buf[n] = 0;
+	      for (j = 0; j < n; j++)       /* tolerate UTF-16: drop NULs */
+		if (!buf[j])
+		  buf[j] = ' ';
+	      if (grub_strstr (buf, "GENERALIZE_RESEAL"))
+		state = "generalized";
+	      else if (grub_strstr (buf, "UNDEPLOYABLE"))
+		state = "failed";
+	    }
+	}
+      grub_errno = GRUB_ERR_NONE;
+      grub_free (ini);
+      grub_env_set ("gb_vdisk_windows", dev);
+      grub_env_export ("gb_vdisk_windows");
+      grub_env_set ("gb_vdisk_windows_state", state);
+      grub_env_export ("gb_vdisk_windows_state");
+      found = 1;
+    }
+  grub_errno = GRUB_ERR_NONE;
+  grub_free (part);
+  grub_free (dev);
+  grub_free (f1);
+  grub_free (f2);
+  return found;
+}
+
+static grub_err_t
+grub_cmd_gb_vdisk (grub_command_t cmd __attribute__ ((unused)), int argc, char **argv)
+{
+  vimg_close (&gbvd_img);
+  gbvd_generation++;
+  grub_env_unset ("gb_vdisk_format");
+  grub_env_unset ("gb_vdisk_windows");
+  grub_env_unset ("gb_vdisk_windows_state");
+  if (argc == 0)
+    return GRUB_ERR_NONE;
+  if (vimg_open (&gbvd_img, argv[0]))
+    return grub_errno;
+  if (gbvd_img.size < 512)
+    {
+      vimg_close (&gbvd_img);
+      return grub_error (GRUB_ERR_BAD_FILE_TYPE, "%s is too small", argv[0]);
+    }
+  grub_env_set ("gb_vdisk_format", vimg_names[gbvd_img.fmt]);
+  grub_env_export ("gb_vdisk_format");
+
+  /* An installed Windows inside? (native VHD boot, see gb_vhd_bcd) */
+  {
+    grub_disk_t d = grub_disk_open ("gbvd");
+    if (d)
+      {
+	grub_partition_iterate (d, gbvd_find_windows, NULL);
+	grub_disk_close (d);
+      }
+    grub_errno = GRUB_ERR_NONE;
+  }
+  return GRUB_ERR_NONE;
+}
+
+/*
+ * gb_vhd_bcd TEMPLATE VHD_PATH DATA_DEVICE
+ *
+ * Native VHD boot of Windows: reads the BCD template (made by scripts/make-bcd.py) and
+ * fills in, in place, the VHD's path on the data partition and that partition's identity
+ * (MBR: disk signature + byte offset; GPT: disk GUID + partition GUID), the same fields
+ * bcdboot writes for "vhd=[X:]\path". The result is (proc)/glassboot_bcd, which wimboot
+ * hands to Windows Boot Manager. Boot manager then opens the VHD from the data partition
+ * (Windows 10 1809 and later read exFAT) and loads Windows from inside it.
+ */
+#define BCD_PATH_FIELD 520
+static char *bcd_buf;
+static grub_size_t bcd_len;
+
+static char *
+bcd_get_contents (grub_size_t *sz)
+{
+  char *c;
+  *sz = bcd_len;
+  if (!bcd_buf)
+    return grub_strdup ("");
+  c = grub_malloc (bcd_len);
+  if (c)
+    grub_memcpy (c, bcd_buf, bcd_len);
+  return c;
+}
+
+static struct grub_procfs_entry bcd_entry = {
+  .name = "glassboot_bcd",
+  .get_contents = bcd_get_contents
+};
+
+static grub_err_t
+grub_cmd_gb_vhd_bcd (grub_command_t cmd __attribute__ ((unused)), int argc, char **argv)
+{
+  static const char marker[] = "\\GLASSBOOT-VHD-PATH";
+  grub_uint8_t mk[sizeof (marker) * 2], ident[40];
+  grub_file_t f;
+  grub_disk_t disk = NULL;
+  grub_size_t i, k, plen;
+  int patched = 0, gpt = 0;
+  const char *path;
+  char *devname;
+
+  if (argc != 3)
+    return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("usage: gb_vhd_bcd TEMPLATE VHD_PATH DATA_DEVICE"));
+  path = argv[1];
+  plen = grub_strlen (path);
+  if (plen == 0 || plen * 2 + 2 > BCD_PATH_FIELD)
+    return grub_error (GRUB_ERR_BAD_ARGUMENT, "VHD path too long (at most 259 characters)");
+  for (i = 0; i < plen; i++)
+    if ((grub_uint8_t) path[i] >= 0x80)
+      return grub_error (GRUB_ERR_BAD_ARGUMENT,
+			 "the VHD path must use ASCII characters only (rename the file or its folders)");
+
+  /* The data partition's identity: offset (bytes) + MBR signature, or GPT GUIDs. */
+  grub_memset (ident, 0, sizeof (ident));
+  devname = grub_file_get_device_name (argv[2]);
+  disk = grub_disk_open (devname ? devname : argv[2]);
+  grub_free (devname);
+  if (!disk || !disk->partition)
+    {
+      if (disk)
+	grub_disk_close (disk);
+      return grub_error (GRUB_ERR_BAD_DEVICE, "%s is not a partition", argv[2]);
+    }
+  {
+    struct grub_partition *part = disk->partition;
+    grub_uint64_t start = grub_partition_get_start (part);
+    gpt = grub_strcmp (part->partmap->name, "gpt") == 0;
+    disk->partition = part->parent;       /* read the whole disk */
+    if (!gpt)
+      {
+	grub_uint64_t bytes = start << GRUB_DISK_SECTOR_BITS;
+	grub_set_unaligned64 (ident, grub_cpu_to_le64 (bytes));
+	grub_set_unaligned32 (ident + 20, grub_cpu_to_le32 (1));
+	if (grub_disk_read (disk, 0, 440, 4, ident + 24))
+	  goto fail;
+      }
+    else
+      {
+	grub_uint8_t hdr[92], ent[32];
+	grub_uint64_t entries;
+	grub_uint32_t esize;
+	if (grub_disk_read (disk, 1, 0, sizeof (hdr), hdr))
+	  goto fail;
+	entries = grub_le_to_cpu64 (grub_get_unaligned64 (hdr + 72));
+	esize = grub_le_to_cpu32 (grub_get_unaligned32 (hdr + 84));
+	if (grub_disk_read (disk, entries, (grub_off_t) part->index * esize, sizeof (ent), ent))
+	  goto fail;
+	grub_memcpy (ident, ent + 16, 16);        /* unique partition GUID */
+	grub_set_unaligned32 (ident + 20, 0);
+	grub_memcpy (ident + 24, hdr + 56, 16);   /* disk GUID */
+      }
+    disk->partition = part;
+  }
+  grub_disk_close (disk);
+  disk = NULL;
+
+  f = grub_file_open (argv[0], GRUB_FILE_TYPE_CONFIG | GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (!f)
+    return grub_errno;
+  grub_free (bcd_buf);
+  bcd_len = grub_file_size (f);
+  bcd_buf = bcd_len < (1 << 20) ? grub_malloc (bcd_len) : NULL;
+  if (!bcd_buf || grub_file_read (f, bcd_buf, bcd_len) != (grub_ssize_t) bcd_len)
+    {
+      grub_file_close (f);
+      grub_free (bcd_buf);
+      bcd_buf = NULL;
+      return grub_errno ? grub_errno : grub_error (GRUB_ERR_FILE_READ_ERROR, "cannot read %s", argv[0]);
+    }
+  grub_file_close (f);
+
+  for (i = 0; i < sizeof (marker) - 1; i++)
+    {
+      mk[2 * i] = marker[i];
+      mk[2 * i + 1] = 0;
+    }
+  /* Each device element: [identity 40 bytes][reserved 16][path field at +0x38]. */
+  for (i = 0x38; i + BCD_PATH_FIELD <= bcd_len; i += 2)
+    {
+      grub_uint8_t *p = (grub_uint8_t *) bcd_buf + i;
+      if (grub_memcmp (p, mk, 2 * (sizeof (marker) - 1)) != 0)
+	continue;
+      grub_memcpy (p - 0x38, ident, sizeof (ident));
+      grub_memset (p, 0, BCD_PATH_FIELD);
+      for (k = 0; k < plen; k++)
+	p[2 * k] = path[k] == '/' ? '\\' : path[k];
+      patched++;
+      i += BCD_PATH_FIELD - 2;
+    }
+  if (!patched)
+    {
+      grub_free (bcd_buf);
+      bcd_buf = NULL;
+      return grub_error (GRUB_ERR_BAD_FILE_TYPE, "%s is not a Glassboot VHD BCD template", argv[0]);
+    }
+  return GRUB_ERR_NONE;
+
+ fail:
+  if (disk)
+    grub_disk_close (disk);
+  return grub_errno;
 }
 
 /* ------------------------------------------------------------------ gb_wimboot_efi */
@@ -1541,7 +2359,7 @@ struct gb_vdisk
 {
   grub_efi_block_io_t bio; /* must be first */
   grub_efi_block_io_media_t media;
-  grub_file_t file;
+  struct vimg img;
   grub_uint64_t size;      /* bytes exposed */
 };
 
@@ -1587,8 +2405,7 @@ gb_vd_read (grub_efi_block_io_t *this, grub_efi_uint32_t media_id, grub_efi_lba_
   off = lba * vd->media.block_size;
   if (lba > vd->media.last_block || off + size > vd->size)
     return GRUB_EFI_INVALID_PARAMETER;
-  grub_file_seek (vd->file, off);
-  if (grub_file_read (vd->file, buf, size) != (grub_ssize_t) size)
+  if (vimg_read (&vd->img, off, size, buf))
     {
       grub_errno = GRUB_ERR_NONE;
       return GRUB_EFI_DEVICE_ERROR;
@@ -1660,7 +2477,6 @@ grub_cmd_gb_efi_vdisk_boot (grub_command_t cmd __attribute__ ((unused)), int arg
   grub_efi_uintn_t nfs = 0, i;
   grub_efi_status_t st;
   grub_uint32_t block;
-  grub_uint64_t fsize;
   int tried = 0;
 #if defined (__x86_64__)
   const char *loader = "\\EFI\\BOOT\\BOOTX64.EFI";
@@ -1672,34 +2488,16 @@ grub_cmd_gb_efi_vdisk_boot (grub_command_t cmd __attribute__ ((unused)), int arg
     return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("usage: gb_efi_vdisk_boot cd|hd|vhd FILE"));
 
   grub_memset (&gb_vd, 0, sizeof (gb_vd));
-  gb_vd.file = grub_file_open (argv[1], GRUB_FILE_TYPE_LOOPBACK | GRUB_FILE_TYPE_NO_DECOMPRESS);
-  if (!gb_vd.file)
+  /* The format (raw, VHD fixed/dynamic, VHDX) comes from the file's contents. */
+  if (vimg_open (&gb_vd.img, argv[1]))
     return grub_errno;
-  fsize = grub_file_size (gb_vd.file);
   block = argv[0][0] == 'c' ? 2048 : 512;
-  gb_vd.size = fsize;
-
-  if (argv[0][0] == 'v')
+  if (block == 2048 && gb_vd.img.fmt != VIMG_RAW)
     {
-      /* VHD footer: "conectix" + big-endian disk type at offset 60 (2 = fixed). */
-      grub_uint8_t footer[512];
-      grub_uint32_t type;
-      grub_file_seek (gb_vd.file, fsize - 512);
-      if (fsize < 1024 || grub_file_read (gb_vd.file, footer, 512) != 512
-	  || grub_memcmp (footer, "conectix", 8) != 0)
-	{
-	  grub_file_close (gb_vd.file);
-	  return grub_error (GRUB_ERR_BAD_FILE_TYPE, "%s is not a VHD file", argv[1]);
-	}
-      type = grub_be_to_cpu32 (grub_get_unaligned32 (footer + 60));
-      if (type != 2)
-	{
-	  grub_file_close (gb_vd.file);
-	  return grub_error (GRUB_ERR_BAD_FILE_TYPE,
-			     "only fixed-size VHDs are supported (convert dynamic VHDs to fixed)");
-	}
-      gb_vd.size = fsize - 512;
+      vimg_close (&gb_vd.img);
+      return grub_error (GRUB_ERR_BAD_FILE_TYPE, "%s is a disk image, not a CD image", argv[1]);
     }
+  gb_vd.size = gb_vd.img.size;
 
   {
     /* grub_divmod64: i386-efi has no libgcc 64-bit division. */
@@ -1709,7 +2507,7 @@ grub_cmd_gb_efi_vdisk_boot (grub_command_t cmd __attribute__ ((unused)), int arg
   }
   if (gb_vd.size < block)
     {
-      grub_file_close (gb_vd.file);
+      vimg_close (&gb_vd.img);
       return grub_error (GRUB_ERR_BAD_FILE_TYPE, "%s is too small", argv[1]);
     }
   gb_vd.media.media_id = 0x47420001;
@@ -1771,8 +2569,7 @@ grub_cmd_gb_efi_vdisk_boot (grub_command_t cmd __attribute__ ((unused)), int arg
       bs->uninstall_protocol_interface (handle, &gb_bio_guid, &gb_vd.bio);
       bs->uninstall_protocol_interface (handle, &gb_dp_guid, &gb_vd_devpath);
     }
-  grub_file_close (gb_vd.file);
-  gb_vd.file = NULL;
+  vimg_close (&gb_vd.img);
   return grub_errno;
 }
 #endif /* GRUB_MACHINE_EFI */
@@ -2116,13 +2913,36 @@ grub_cmd_gb_scan_os (grub_command_t cmd __attribute__ ((unused)), int argc, char
 
 /* ------------------------------------------------------------------ module */
 
-static grub_command_t cmd_scan, cmd_enable, cmd_disable, cmd_config, cmd_scan_os;
+/* GRUB's BSD loader predates FreeBSD's move from hint.acpi.0.rsdp to
+   acpi.rsdp. EFI has no legacy BIOS scan area: pass the firmware pointer. */
+static grub_err_t
+grub_cmd_gb_freebsd_env (grub_command_t cmd __attribute__ ((unused)),
+                         int argc __attribute__ ((unused)), char **argv __attribute__ ((unused)))
+{
+  void *rsdp = grub_machine_acpi_get_rsdpv2 ();
+  char addr[32];
+  grub_env_unset ("kFreeBSD.acpi.rsdp");
+  grub_env_unset ("kFreeBSD.hint.acpi.0.rsdp");
+  if (!rsdp)
+    rsdp = grub_machine_acpi_get_rsdpv1 ();
+  if (rsdp)
+    {
+      grub_snprintf (addr, sizeof (addr), "0x%llx", (unsigned long long) (grub_addr_t) rsdp);
+      grub_env_set ("kFreeBSD.acpi.rsdp", addr);
+      grub_env_set ("kFreeBSD.hint.acpi.0.rsdp", addr);
+    }
+  return GRUB_ERR_NONE;
+}
+
+static grub_command_t cmd_scan, cmd_enable, cmd_disable, cmd_config, cmd_scan_os, cmd_vdisk, cmd_vhd_bcd, cmd_freebsd_env;
 #ifdef GRUB_MACHINE_EFI
 static grub_command_t cmd_wimboot_efi, cmd_vdisk_boot, cmd_efi_boot_os;
 #endif
 
 GRUB_MOD_INIT (glassboot)
 {
+  cmd_freebsd_env = grub_register_command ("gb_freebsd_env", grub_cmd_gb_freebsd_env, 0,
+                                          N_("Pass firmware ACPI information to FreeBSD."));
   cmd_scan = grub_register_command ("gb_scan", grub_cmd_gb_scan, N_("(DEVICE)"),
 				    N_("Find ISO files and build the Glassboot menu."));
   cmd_enable = grub_register_command ("gb_hook_enable", grub_cmd_gb_hook_enable,
@@ -2148,15 +2968,29 @@ GRUB_MOD_INIT (glassboot)
   cmd_scan_os = grub_register_command ("gb_scan_os", grub_cmd_gb_scan_os, N_("OWN_DISK"),
 				       N_("Find installed operating systems on other disks."));
   grub_procfs_register ("glassboot_os", &os_entry);
+  cmd_vdisk = grub_register_command ("gb_vdisk", grub_cmd_gb_vdisk, N_("[FILE]"),
+				     N_("Make the disk inside FILE (raw, VHD, VHDX) available as (gbvd)."));
+  grub_disk_dev_register (&gbvd_dev);
+  cmd_vhd_bcd = grub_register_command ("gb_vhd_bcd", grub_cmd_gb_vhd_bcd,
+				       N_("TEMPLATE VHD_PATH DATA_DEVICE"),
+				       N_("Make (proc)/glassboot_bcd for booting Windows from a VHD."));
+  grub_procfs_register ("glassboot_bcd", &bcd_entry);
 }
 
 GRUB_MOD_FINI (glassboot)
 {
+  grub_unregister_command (cmd_freebsd_env);
   uninstall_wrappers ();
   grub_procfs_unregister (&menu_entry);
   grub_procfs_unregister (&os_entry);
   grub_unregister_command (cmd_config);
   grub_unregister_command (cmd_scan_os);
+  grub_unregister_command (cmd_vdisk);
+  grub_unregister_command (cmd_vhd_bcd);
+  grub_procfs_unregister (&bcd_entry);
+  grub_free (bcd_buf);
+  grub_disk_dev_unregister (&gbvd_dev);
+  vimg_close (&gbvd_img);
   cfg_clear ();
   grub_free (os_text);
   grub_unregister_command (cmd_scan);

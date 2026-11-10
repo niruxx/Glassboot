@@ -12,9 +12,9 @@ namespace glassboot {
 // removed settings, appends new ones, and keeps comments and unknown lines.
 class Config {
 public:
-    enum class Kind { Alias, Hide, Args, Persist };
+    enum class Kind { Alias, Hide, Args, Persist, Class };
 
-    // Global keys: "timeout", "default", "view", "theme", "password".
+    // Global keys: "timeout", "default", "view", "theme", "password", "language".
     static const std::vector<std::string>& globalKeys();
 
     static Config parse(const std::string& text);

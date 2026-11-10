@@ -4,8 +4,13 @@
 #include "Elevation.h"
 #include "InstallWorker.h"
 #include "Installer.h"
+#include "Mbr.h"
+#include "Gpt.h"
 
 #include <QCloseEvent>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QFormLayout>
 #include <QDateTime>
 #include <QFileDialog>
 #include <QFontDatabase>
@@ -99,6 +104,17 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     notice_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     notice_->setVisible(false);
     root->addWidget(notice_);
+
+    auto* diskOptions = new QFormLayout;
+    partitionStyle_ = new QComboBox;
+    partitionStyle_->addItem(tr("MBR (BIOS and UEFI)"), false);
+    partitionStyle_->addItem(tr("GPT (UEFI only, supports disks over 2 TiB)"), true);
+    diskOptions->addRow(tr("Partition table:"), partitionStyle_);
+    reserve_ = new QSpinBox;
+    reserve_->setRange(0, 2000000000);
+    reserve_->setSuffix(tr(" MiB"));
+    diskOptions->addRow(tr("Reserve at end of disk:"), reserve_);
+    root->addLayout(diskOptions);
 
     // ---- progress
     status_ = new QLabel;
@@ -345,6 +361,8 @@ void MainWindow::setBusy(bool busy) {
     busy_ = busy;
     list_->setEnabled(!busy);
     refreshButton_->setEnabled(!busy);
+    partitionStyle_->setEnabled(!busy);
+    reserve_->setEnabled(!busy);
     cancelButton_->setVisible(busy);
     cancelButton_->setEnabled(busy);
     updateButtons();
@@ -354,8 +372,18 @@ void MainWindow::startInstall() {
     const DiskInfo* d = selectedDrive();
     if (!d || !payload_ || !elevated_ || busy_) return;
 
+    try {
+        uint64_t reserveBytes = uint64_t(reserve_->value()) << 20;
+        if (partitionStyle_->currentData().toBool()) computeGptLayout(d->sizeBytes, payload_->espMb, reserveBytes);
+        else Layout::compute(d->sizeBytes, payload_->espMb, reserveBytes);
+    } catch (const std::exception& e) {
+        QMessageBox::warning(this, tr("Invalid disk layout"), q(e.what()));
+        return;
+    }
+
     QString what = QString("<b>%1</b> (%2, %3)").arg(driveName(*d).toHtmlEscaped(), q(formatSize(d->sizeBytes)),
                                                       q(d->id).toHtmlEscaped());
+    what += tr("<br>%1; reserved space: %2 MiB").arg(partitionStyle_->currentText()).arg(reserve_->value());
     if (!d->mountPoints.empty()) what += tr("<br>currently %1").arg(mountList(*d).toHtmlEscaped());
     QMessageBox box(QMessageBox::Warning, tr("Format this drive?"),
                     tr("%1<br><br>The drive will be formatted and <b>everything on it will be erased</b>.")
@@ -396,7 +424,10 @@ void MainWindow::startWorker(const DiskInfo& diskRef, bool update) {
     setBusy(true);
 
     thread_ = new QThread(this);
-    worker_ = new InstallWorker(d, *payload_, update);
+    InstallOptions options;
+    options.gpt = partitionStyle_->currentData().toBool();
+    options.reserveBytes = uint64_t(reserve_->value()) << 20;
+    worker_ = new InstallWorker(d, *payload_, update, options);
     worker_->moveToThread(thread_);
     connect(thread_, &QThread::started, worker_, &InstallWorker::run);
     connect(worker_, &InstallWorker::progress, this, &MainWindow::onProgress);

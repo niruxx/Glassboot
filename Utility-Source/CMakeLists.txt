@@ -26,6 +26,7 @@ add_library(glassboot_core STATIC
   core/Config.cpp
   core/Payload.cpp
   core/Mbr.cpp
+  core/Gpt.cpp
   core/ExFat.cpp
   core/BlockDevice.cpp
   core/Installer.cpp
@@ -84,3 +85,12 @@ enable_testing()
 add_executable(glassboot-core-test tests/core-test.cpp)
 target_link_libraries(glassboot-core-test PRIVATE glassboot_core)
 add_test(NAME core COMMAND glassboot-core-test)
+
+add_executable(glassboot-layout-test tests/layout-test.cpp)
+target_link_libraries(glassboot-layout-test PRIVATE glassboot_core)
+add_test(NAME layout COMMAND glassboot-layout-test)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME translations COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check-translations.py")
+endif()

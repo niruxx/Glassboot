@@ -89,6 +89,13 @@ static void testConfig() {
     fresh.setGlobal("timeout", "3");
     CHECK(fresh.serialize().find("\ntimeout = 3\n") != std::string::npos);
     CHECK(Config().serialize().empty());
+    Config icons = Config::parse("language=es\nclass /Linux/a.iso = debian\n");
+    CHECK(icons.global("language") == "es");
+    CHECK(icons.value(Config::Kind::Class, "/linux/A.ISO") == "debian");
+    icons.setValue(Config::Kind::Class, "/Linux/a.iso", "ubuntu");
+    Config roundtrip = Config::parse(icons.serialize());
+    CHECK(roundtrip.value(Config::Kind::Class, "/Linux/a.iso") == "ubuntu");
+    CHECK(roundtrip.global("language") == "es");
 }
 
 int main(int argc, char** argv) {

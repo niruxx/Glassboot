@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -37,6 +38,7 @@ void usage() {
                  "  glassboot-cli update --device ID | --image FILE [--yes] [--payload DIR]\n"
                  "      refresh the boot files, keeping the ISO files on the drive\n"
                  "\n"
+                 "Install options: --gpt (UEFI only), --reserve SIZE (unallocated tail space).\n"
                  "SIZE accepts M/G suffixes (e.g. 8G). ID is shown by 'list'.\n";
 }
 
@@ -50,7 +52,10 @@ uint64_t parseSize(const std::string& s) {
     else if (suf == "G" || suf == "g") mul = 1ull << 30;
     else if (suf == "T" || suf == "t") mul = 1ull << 40;
     else if (!suf.empty()) throw Error("bad size suffix: " + suf);
-    return uint64_t(v * double(mul));
+    long double bytes = static_cast<long double>(v) * mul;
+    if (!std::isfinite(v) || v < 0 || bytes >= std::ldexp(1.0L, 64))
+        throw Error("invalid size: " + s);
+    return uint64_t(bytes);
 }
 
 std::string exeDir(const char* argv0) {
@@ -70,6 +75,7 @@ int main(int argc, char** argv) {
         const std::string cmd = args[0];
         std::string device, image, payloadDir, size;
         bool yes = false, all = false;
+        InstallOptions options;
         for (size_t i = 1; i < args.size(); ++i) {
             auto next = [&]() -> std::string {
                 if (i + 1 >= args.size()) throw Error("missing value for " + args[i]);
@@ -79,6 +85,8 @@ int main(int argc, char** argv) {
             else if (args[i] == "--image") image = next();
             else if (args[i] == "--size") size = next();
             else if (args[i] == "--payload") payloadDir = next();
+            else if (args[i] == "--gpt") options.gpt = true;
+            else if (args[i] == "--reserve") options.reserveBytes = parseSize(next());
             else if (args[i] == "--yes") yes = true;
             else if (args[i] == "--all") all = true;
             else throw Error("unknown option " + args[i]);
@@ -105,6 +113,8 @@ int main(int argc, char** argv) {
         }
         if (cmd != "install" && cmd != "update") { usage(); return 2; }
         const bool isUpdate = cmd == "update";
+        if (isUpdate && (options.gpt || options.reserveBytes))
+            throw Error("--gpt and --reserve apply only to install; update keeps the layout");
 
         if (payloadDir.empty()) payloadDir = Payload::locate(exeDir(argv[0]));
         if (payloadDir.empty()) throw Error("payload not found; pass --payload DIR");
@@ -166,7 +176,7 @@ int main(int argc, char** argv) {
             std::cout << line << std::endl;
         };
         if (isUpdate) update(*dev, payload, cb, g_cancel);
-        else install(*dev, payload, cb, g_cancel);
+        else install(*dev, payload, cb, g_cancel, options);
         if (progressShown) std::fprintf(stderr, "\n");
         return 0;
     } catch (const std::exception& e) {

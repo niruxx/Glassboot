@@ -1,0 +1,184 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: es\n"
+
+msgid "$1 is a $gb_vdisk_format image. On Legacy BIOS only raw images and"
+msgstr "$1 es una imagen $gb_vdisk_format. En BIOS solo se admiten imágenes raw y"
+
+msgid "(this reads the whole file and can take a few minutes)..."
+msgstr "(se leerá todo el archivo; puede tardar unos minutos)..."
+
+msgid "About Glassboot $glassboot_version ($grub_platform)"
+msgstr "Acerca de Glassboot $glassboot_version ($grub_platform)"
+
+msgid "Args:   $gb_args"
+msgstr "Argumentos: $gb_args"
+
+msgid "Boot an installed operating system...    [F4]"
+msgstr "Arrancar un sistema operativo instalado...    [F4]"
+
+msgid "Bootable files: $gb_iso_count"
+msgstr "Archivos de arranque: $gb_iso_count"
+
+msgid "Booting $1 via wimboot..."
+msgstr "Arrancando $1 mediante wimboot..."
+
+msgid "Booting Windows installer via wimboot..."
+msgstr "Arrancando el instalador de Windows mediante wimboot..."
+
+msgid "Compare it with the checksum published by the image's distributor."
+msgstr "Compárela con la suma publicada por el distribuidor de la imagen."
+
+msgid "Compatibility mode (known distributions, no hook)"
+msgstr "Modo de compatibilidad (distribuciones conocidas, sin hook)"
+
+msgid "Compatibility mode doesn't recognise this ISO's layout."
+msgstr "El modo de compatibilidad no reconoce la estructura de esta ISO."
+
+msgid "Computing the $gb_hash_algo checksum of $1"
+msgstr "Calculando la suma $gb_hash_algo de $1"
+
+msgid "Could not open $iso_path"
+msgstr "No se pudo abrir $iso_path"
+
+msgid "Data partition: ($gb_data)"
+msgstr "Partición de datos: ($gb_data)"
+
+msgid "Data: ($gb_data)  uuid=$gb_data_uuid  fs=$gb_data_fs  part=$gb_partuuid"
+msgstr "Datos: ($gb_data)  uuid=$gb_data_uuid  fs=$gb_data_fs  part=$gb_partuuid"
+
+msgid "ESP:  ($gb_esp)"
+msgstr "ESP:  ($gb_esp)"
+
+msgid "Enter a filename, folder or menu name"
+msgstr "Introduzca un nombre de archivo, carpeta o entrada"
+
+msgid "Exit to the firmware's boot menu"
+msgstr "Salir al menú de arranque del firmware"
+
+msgid "Glassboot $glassboot_version - GRUB $grub_cpu-$grub_platform"
+msgstr "Glassboot $glassboot_version - GRUB $grub_cpu-$grub_platform"
+
+msgid "ISO as a virtual CD (start the ISO's own EFI loader; BSDs, other OSes)"
+msgstr "ISO como CD virtual (cargador EFI de la ISO; BSD y otros sistemas)"
+
+msgid "Initrd: $gb_i"
+msgstr "Initrd: $gb_i"
+
+msgid "Kernel: $gb_k"
+msgstr "Núcleo: $gb_k"
+
+msgid "Load the ISO into RAM (memdisk; small ISOs: DOS tools, firmware updaters)"
+msgstr "Cargar la ISO en RAM (memdisk; ISO pequeñas: DOS, actualizadores de firmware)"
+
+msgid "Loading $1 into memory (memdisk)..."
+msgstr "Cargando $1 en memoria (memdisk)..."
+
+msgid "Loading $gb_iso_path into memory (memdisk)..."
+msgstr "Cargando $gb_iso_path en memoria (memdisk)..."
+
+msgid "More boot modes (if an ISO doesn't start)...    [F6]"
+msgstr "Más modos de arranque (si una ISO no inicia)...    [F6]"
+
+msgid "No matching boot files"
+msgstr "No hay archivos de arranque coincidentes"
+
+msgid "No other operating system found"
+msgstr "No se encontró otro sistema operativo"
+
+msgid "Nothing to boot yet - copy .iso (or .wim, .img, .efi) files onto the GLASSBOOT drive"
+msgstr "Nada que arrancar: copie archivos .iso (o .wim, .img, .efi) en la unidad GLASSBOOT"
+
+msgid "Power off"
+msgstr "Apagar"
+
+msgid "Press Enter to return to the menu."
+msgstr "Pulse Intro para volver al menú."
+
+msgid "Reboot"
+msgstr "Reiniciar"
+
+msgid "Search (empty shows all files):"
+msgstr "Buscar (vacío muestra todos los archivos):"
+
+msgid "Search boot files...    [F3]"
+msgstr "Buscar archivos de arranque...    [F3]"
+
+msgid "Starting $1 ..."
+msgstr "Iniciando $1 ..."
+
+msgid "Starting Windows from $1 (native VHD boot)..."
+msgstr "Iniciando Windows desde $1 (arranque VHD nativo)..."
+
+msgid "Starting the EFI boot loader on $1 ..."
+msgstr "Iniciando el cargador EFI de $1 ..."
+
+msgid "Starting the ISO's EFI boot loader with the ISO as a virtual CD..."
+msgstr "Iniciando el cargador EFI de la ISO como un CD virtual..."
+
+msgid "The Windows in $1 failed to finish its first start."
+msgstr "Windows en $1 no pudo completar su primer inicio."
+
+msgid "The Windows in $1 has never been started (a freshly applied image)."
+msgstr "Windows en $1 nunca se ha iniciado (imagen recién aplicada)."
+
+msgid "This ISO has no boot menu Glassboot can use; trying compatibility mode."
+msgstr "Esta ISO no tiene un menú compatible; probando el modo de compatibilidad."
+
+msgid "This Windows has no BIOS boot manager (\\Windows\\Boot\\PCAT\\bootmgr)."
+msgstr "Este Windows no tiene gestor de arranque BIOS (\\Windows\\Boot\\PCAT\\bootmgr)."
+
+msgid "This Windows has no UEFI boot manager (\\Windows\\Boot\\EFI\\bootmgfw.efi)."
+msgstr "Este Windows no tiene gestor de arranque UEFI (\\Windows\\Boot\\EFI\\bootmgfw.efi)."
+
+msgid "This is a Windows ISO, but wimboot is missing from the ESP."
+msgstr "Esta ISO es de Windows, pero falta wimboot en la partición EFI."
+
+msgid "Tools...    [F5]"
+msgstr "Herramientas...    [F5]"
+
+msgid "UEFI firmware settings"
+msgstr "Configuración del firmware UEFI"
+
+msgid "Unattended install: $1"
+msgstr "Instalación desatendida: $1"
+
+msgid "Use the ISO's loopback.cfg (distribution finds the ISO file itself)"
+msgstr "Usar loopback.cfg de la ISO (la distribución encuentra el archivo ISO)"
+
+msgid "Verify a file's checksum: MD5"
+msgstr "Verificar suma de un archivo: MD5"
+
+msgid "Verify a file's checksum: SHA-1"
+msgstr "Verificar suma de un archivo: SHA-1"
+
+msgid "Verify a file's checksum: SHA-256"
+msgstr "Verificar suma de un archivo: SHA-256"
+
+msgid "Verify a file's checksum: SHA-512"
+msgstr "Verificar suma de un archivo: SHA-512"
+
+msgid "Windows Setup        $iso_path"
+msgstr "Instalación de Windows        $iso_path"
+
+msgid "Windows Setup, skipping Windows 11 hardware checks (TPM, Secure Boot, CPU, RAM)"
+msgstr "Instalar Windows sin comprobar requisitos de Windows 11 (TPM, Secure Boot, CPU, RAM)"
+
+msgid "Windows Setup, skipping hardware checks + allow a local account (no Microsoft account)"
+msgstr "Instalar Windows sin comprobar requisitos y permitir cuenta local (sin cuenta Microsoft)"
+
+msgid "Windows has to finish its first start once outside Glassboot: start the VHD"
+msgstr "Windows debe completar su primer inicio fuera de Glassboot: inicie el VHD"
+
+msgid "can start it."
+msgstr "podrá iniciarlo."
+
+msgid "fixed-size VHDs can be booted (start the computer in UEFI mode instead)."
+msgstr "VHD de tamaño fijo (inicie el equipo en modo UEFI)."
+
+msgid "in a virtual machine (e.g. Hyper-V) or natively with bcdboot, until the first"
+msgstr "en una máquina virtual (por ejemplo, Hyper-V) o con bcdboot, hasta que aparezca"
+
+msgid "setup screen (region/keyboard) or the desktop appears. After that, Glassboot"
+msgstr "la pantalla de configuración (región/teclado) o el escritorio. Después Glassboot"

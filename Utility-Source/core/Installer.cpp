@@ -2,6 +2,7 @@
 
 #include "ExFat.h"
 #include "Mbr.h"
+#include "Gpt.h"
 #include "Sha256.h"
 
 #include <algorithm>
@@ -72,7 +73,7 @@ private:
 };
 
 // Write esp.img at `espStart`, personalising hidden-sectors and the volume serial.
-void writeEsp(BlockDevice& dev, const Payload& payload, uint32_t espStart, uint32_t serial, Steps& s) {
+void writeEsp(BlockDevice& dev, const Payload& payload, uint64_t espStart, uint32_t serial, Steps& s) {
     std::ifstream f(payload.espImagePath, std::ios::binary);
     if (!f) throw Error("cannot open " + payload.espImagePath);
     const size_t chunk = 4 * kMiB;
@@ -85,7 +86,7 @@ void writeEsp(BlockDevice& dev, const Payload& payload, uint32_t espStart, uint3
         if (done == 0) {
             if (std::memcmp(buf.data() + 0x36, "FAT16   ", 8) != 0) throw Error("esp.img is not FAT16");
             uint8_t* b = buf.data();
-            for (int i = 0; i < 4; ++i) b[0x1C + i] = uint8_t(espStart >> (8 * i)); // hidden sectors
+            for (int i = 0; i < 4; ++i) b[0x1C + i] = espStart > 0xFFFFFFFFull ? 0 : uint8_t(espStart >> (8 * i)); // 0 beyond the FAT BPB's 32-bit range; UEFI uses GPT
             for (int i = 0; i < 4; ++i) b[0x27 + i] = uint8_t(serial >> (8 * i));   // volume serial
         }
         dev.write(espOffset + done, buf.data(), n);
@@ -109,12 +110,12 @@ void writeCore(BlockDevice& dev, const std::vector<uint8_t>& core) {
 
 // Read back MBR, core.img, marker and the ESP and compare with what was written.
 void verify(BlockDevice& dev, const Payload& payload, const std::array<uint8_t, 512>& mbr,
-            const std::vector<uint8_t>& core, const std::array<uint8_t, 512>& marker, uint32_t espStart, Steps& s) {
+            const std::vector<uint8_t>& core, const std::array<uint8_t, 512>& marker, uint64_t espStart, Steps& s) {
     {
         AlignedBuffer b(core.size() + 512);
         dev.read(0, b.data(), b.size());
         if (std::memcmp(b.data(), mbr.data(), 512) != 0) throw Error("verification failed: MBR");
-        if (std::memcmp(b.data() + 512, core.data(), core.size()) != 0) throw Error("verification failed: core.img");
+        if (!core.empty() && std::memcmp(b.data() + 512, core.data(), core.size()) != 0) throw Error("verification failed: core.img");
         AlignedBuffer m(512);
         dev.read(kMarkerLba * 512, m.data(), 512);
         if (std::memcmp(m.data(), marker.data(), 512) != 0) throw Error("verification failed: marker");
@@ -162,11 +163,17 @@ ExistingInstall detectInstall(BlockDevice& dev) {
     AlignedBuffer s0(512), esp(512), marker(512);
     dev.read(0, s0.data(), 512);
     Layout l;
-    if (!parseLayout(s0.data(), dev.sizeBytes(), l)) return r;
+    if (!parseLayout(s0.data(), dev.sizeBytes(), l)) {
+        if (!readGpt(dev, l)) return r;
+        r.gpt = true;
+    }
     dev.read(uint64_t(l.espStart) * 512, esp.data(), 512);
     if (std::memcmp(esp.data() + 0x2B, "GLASS_EFI  ", 11) != 0) return r; // FAT16 BPB volume label
     dev.read(kMarkerLba * 512, marker.data(), 512);
-    if (!parseMarker(marker.data(), r.version)) r.version = "0.1.x (no marker)";
+    if (!parseMarker(marker.data(), r.version)) {
+        if (r.gpt) return {}; // never mistake a generic GPT/FAT drive for Glassboot
+        r.version = "0.1.x (no marker)";
+    }
     r.found = true;
     r.dataStart = l.dataStart;
     r.dataSectors = l.dataSectors;
@@ -185,15 +192,17 @@ ExistingInstall probeInstall(const DiskInfo& disk) {
     }
 }
 
-void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel) {
+void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel,
+             const InstallOptions& options) {
     Steps s(cb, cancel);
-    const Layout l = Layout::compute(dev.sizeBytes(), payload.espMb);
+    const Layout l = options.gpt ? computeGptLayout(dev.sizeBytes(), payload.espMb, options.reserveBytes)
+                                 : Layout::compute(dev.sizeBytes(), payload.espMb, options.reserveBytes);
     {
         std::ostringstream o;
         o << "Disk: " << formatSize(dev.sizeBytes()) << ", data partition " << formatSize(uint64_t(l.dataSectors) * 512)
           << " at LBA " << l.dataStart << ", EFI partition " << payload.espMb << " MiB at LBA " << l.espStart;
         s.log(o.str());
-        if (l.totalSectors > 0xFFFFFFFFull) s.log("Note: disks over 2 TiB are limited to 2 TiB with an MBR layout.");
+        if (!options.gpt && l.totalSectors > 0xFFFFFFFFull) s.log("Note: disks over 2 TiB are limited to 2 TiB with an MBR layout.");
     }
 
     // -------------------------------------------------------------- 1. clear
@@ -223,6 +232,27 @@ void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& c
     ex.files.push_back({"glassboot", "README.txt", readmeText(payload)});
     formatExFat(dev, ex, [&](double f) { s.sub(f); });
     s.log("exFAT volume \"" + ex.label + "\" serial " + hex32(ex.serial));
+
+    if (options.gpt) {
+        s.step(0.05, "Installing GPT partition tables (UEFI only)");
+        const auto marker = buildMarker(payload.version, payload.espMb);
+        writeSector(dev, kMarkerLba, marker.data());
+        writeGpt(dev, l);
+        dev.flush();
+        s.step(0.25, "Verifying GPT and EFI partition");
+        Layout actual;
+        if (!readGpt(dev, actual) || actual.dataStart != l.dataStart || actual.dataSectors != l.dataSectors ||
+            actual.espStart != l.espStart || actual.espSectors != l.espSectors)
+            throw Error("verification failed: GPT");
+        AlignedBuffer mbr(512);
+        dev.read(0, mbr.data(), 512);
+        std::array<uint8_t,512> expected{};
+        std::memcpy(expected.data(), mbr.data(), 512);
+        verify(dev, payload, expected, {}, marker, l.espStart, s);
+        s.step(0.0, "Finishing"); dev.finalize(); s.done();
+        s.log("Glassboot " + payload.version + " installed successfully (GPT, UEFI only).");
+        return;
+    }
 
     // -------------------------------------------------------------- 4. boot code
     s.step(0.05, "Installing Legacy BIOS boot code");
@@ -265,12 +295,14 @@ void update(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb
     s.step(0.55, "Updating EFI system partition");
     writeEsp(dev, payload, ex.espStart, serial, s);
 
-    s.step(0.05, "Updating Legacy BIOS boot code");
-    const auto core = prepareCoreImg(payload.core);
-    writeCore(dev, core);
+    s.step(0.05, ex.gpt ? "Updating GPT boot marker" : "Updating Legacy BIOS boot code");
+    const auto core = ex.gpt ? std::vector<uint8_t>{} : prepareCoreImg(payload.core);
+    if (!ex.gpt) writeCore(dev, core);
     const auto marker = buildMarker(payload.version, payload.espMb);
     writeSector(dev, kMarkerLba, marker.data());
-    const auto mbr = replaceBootCode(payload.mbr, s0.data()); // partition table + signature kept
+    std::array<uint8_t,512> mbr{};
+    if (ex.gpt) std::memcpy(mbr.data(), s0.data(), 512);
+    else mbr = replaceBootCode(payload.mbr, s0.data()); // partition table + signature kept
     writeSector(dev, 0, mbr.data());
     dev.flush();
 

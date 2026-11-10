@@ -25,6 +25,7 @@ const char* kindName(Config::Kind k) {
     case Config::Kind::Hide: return "hide";
     case Config::Kind::Args: return "args";
     case Config::Kind::Persist: return "persist";
+    case Config::Kind::Class: return "class";
     }
     return "";
 }
@@ -35,6 +36,7 @@ bool kindFromName(const std::string& name, Config::Kind& k) {
     else if (n == "hide") k = Config::Kind::Hide;
     else if (n == "args") k = Config::Kind::Args;
     else if (n == "persist") k = Config::Kind::Persist;
+    else if (n == "class") k = Config::Kind::Class;
     else return false;
     return true;
 }
@@ -54,7 +56,7 @@ void splitLine(const std::string& line, std::string& key, std::string& rest) {
 } // namespace
 
 const std::vector<std::string>& Config::globalKeys() {
-    static const std::vector<std::string> keys{"timeout", "default", "view", "theme", "password"};
+    static const std::vector<std::string> keys{"timeout", "default", "view", "theme", "password", "language"};
     return keys;
 }
 

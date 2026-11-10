@@ -38,7 +38,7 @@
 namespace glassboot {
 namespace {
 
-enum Column { ColFile, ColAlias, ColArgs, ColPersist, ColCount };
+enum Column { ColFile, ColAlias, ColArgs, ColPersist, ColClass, ColCount };
 constexpr int PathRole = Qt::UserRole;
 constexpr int FolderRole = Qt::UserRole + 1;
 
@@ -47,7 +47,7 @@ std::string s(const QString& q) { return q.toStdString(); }
 
 // The same files and folders the boot menu lists (gb_scan in the GRUB module).
 bool bootableFile(const QString& name) {
-    static const QStringList ext{"iso", "wim", "img", "vhd", "efi"};
+    static const QStringList ext{"iso", "wim", "img", "vhd", "vhdx", "efi"};
     return ext.contains(QFileInfo(name).suffix().toLower());
 }
 bool skippedDir(const QString& name) {
@@ -128,6 +128,10 @@ ConfigDialog::ConfigDialog(const QString& root, QWidget* parent) : QDialog(paren
     themeRow->addWidget(theme_);
     themeRow->addWidget(themeBrowse);
     form->addRow(tr("Theme:"), themeRow);
+    language_ = new QComboBox;
+    language_->addItem(tr("English"), "en");
+    language_->addItem(tr("Spanish"), "es");
+    form->addRow(tr("Boot menu language:"), language_);
 
     auto* pwRow = new QHBoxLayout;
     passwordState_ = new QLabel;
@@ -151,7 +155,7 @@ ConfigDialog::ConfigDialog(const QString& root, QWidget* parent) : QDialog(paren
     imgLayout->addWidget(hint);
     images_ = new QTreeWidget;
     images_->setColumnCount(ColCount);
-    images_->setHeaderLabels({tr("File"), tr("Menu name"), tr("Kernel arguments"), tr("Persistence file")});
+    images_->setHeaderLabels({tr("File"), tr("Menu name"), tr("Kernel arguments"), tr("Persistence file"), tr("Icon class")});
     images_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     images_->setUniformRowHeights(true);
     images_->setAllColumnsShowFocus(true);
@@ -194,6 +198,7 @@ void ConfigDialog::load() {
     if (ok && t >= 0) timeout_->setValue(t);
     view_->setCurrentIndex(config_.global("view") == "tree" ? 1 : 0);
     theme_->setText(q(config_.global("theme")));
+    language_->setCurrentIndex(config_.global("language") == "es" ? 1 : 0);
     password_ = q(config_.global("password"));
     updatePasswordLabel();
 
@@ -263,6 +268,7 @@ void ConfigDialog::scanImages() {
                 it->setText(ColAlias, q(config_.value(Config::Kind::Alias, s(path))));
                 it->setText(ColArgs, q(config_.value(Config::Kind::Args, s(path))));
                 it->setText(ColPersist, q(config_.value(Config::Kind::Persist, s(path))));
+                it->setText(ColClass, q(config_.value(Config::Kind::Class, s(path))));
             }
         }
     };
@@ -461,6 +467,7 @@ void ConfigDialog::collect() {
     QString theme = theme_->text().trimmed();
     config_.setGlobal("theme", theme.isEmpty() ? std::string() : Config::normPath(s(theme)));
     config_.setGlobal("password", s(password_));
+    setOr("language", language_->currentData().toString(), "en");
 
     std::function<void(QTreeWidgetItem*)> walk = [&](QTreeWidgetItem* parent) {
         for (int i = 0; i < parent->childCount(); ++i) {
@@ -474,6 +481,7 @@ void ConfigDialog::collect() {
             config_.setValue(Config::Kind::Alias, path, s(it->text(ColAlias)));
             config_.setValue(Config::Kind::Args, path, s(it->text(ColArgs)));
             config_.setValue(Config::Kind::Persist, path, s(it->text(ColPersist)));
+            config_.setValue(Config::Kind::Class, path, s(it->text(ColClass)));
         }
     };
     walk(images_->invisibleRootItem());
