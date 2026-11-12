@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Glassboot
+Comment=Create a multi-boot USB drive
+Exec=glassboot-installer
+Icon=glassboot
+Categories=System;Utility;
+Terminal=false

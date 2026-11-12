@@ -33,6 +33,8 @@ class BlockDevice {
 public:
     virtual ~BlockDevice() = default;
     virtual uint64_t sizeBytes() const = 0;
+    virtual std::string backingPath() const { return {}; }
+    virtual uint32_t logicalSectorSize() const { return 512; }
     virtual void write(uint64_t offset, const void* data, size_t len) = 0;
     virtual void read(uint64_t offset, void* data, size_t len) = 0;
     virtual void flush() = 0;
@@ -57,6 +59,8 @@ std::unique_ptr<BlockDevice> openDiskReadOnly(const DiskInfo& disk);
 
 // Open an existing disk-image file read-write (or read-only).
 std::unique_ptr<BlockDevice> openImageFile(const std::string& path, bool writable);
+// Retain byte-addressed installer I/O while aligning physical transfers to 4 KiB.
+std::unique_ptr<BlockDevice> sectorView(std::unique_ptr<BlockDevice> device, uint32_t sectorSize);
 
 // Create (or truncate) a regular file of `sizeBytes` and use it as a disk image.
 std::unique_ptr<BlockDevice> createImageFile(const std::string& path, uint64_t sizeBytes);

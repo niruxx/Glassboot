@@ -16,6 +16,7 @@ struct SeedFile {
 };
 
 struct ExFatOptions {
+    uint32_t bytesPerSector = 512;
     uint64_t partitionOffsetBytes = 0; // where the partition starts on the device
     uint64_t partitionSectors = 0;     // 512-byte sectors
     std::string label;                 // up to 11 ASCII characters

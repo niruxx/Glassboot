@@ -34,6 +34,8 @@
 #include <fcntl.h>
 #include <linux/dm-ioctl.h>
 #include <linux/loop.h>
+#include <linux/openat2.h>
+#include <linux/fs.h>
 #include <sched.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -46,6 +48,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -59,6 +62,8 @@
 #define PROC BASE "/proc"
 #define DM_NAME "glassboot"
 #define WAIT_SECONDS 120
+static int alpine_bootstrap;
+static int ready_fd = -1;
 
 /* ------------------------------------------------------------------ logging */
 
@@ -105,6 +110,7 @@ static void write_text(const char *path, const char *s) {
 
 static char opt_iso[4096];
 static char opt_persist[4096]; /* optional persistence file (glassboot.cfg "persist") */
+static char opt_seed[4096]; /* NoCloud CIDATA disk */
 static uint32_t opt_sig;
 static unsigned opt_partnum;
 static uint8_t opt_guid[16];
@@ -154,6 +160,9 @@ static int parse_cmdline(void) {
         } else if (!strncmp(tok, "glassboot.persist=", 18)) {
             snprintf(opt_persist, sizeof opt_persist, "%s", tok + 18);
             percent_decode(opt_persist);
+        } else if (!strncmp(tok, "glassboot.seed=", 15)) {
+            snprintf(opt_seed, sizeof opt_seed, "%s", tok + 15);
+            percent_decode(opt_seed);
         } else if (!strncmp(tok, "glassboot.part=", 15)) {
             const char *uuid = tok + 15;
             if (parse_guid(uuid, opt_guid) == 0) {
@@ -265,19 +274,30 @@ static uint32_t gpt_crc(const uint8_t *p, size_t n) {
 /* Match the unique partition GUID, never the disk GUID or a filesystem label. */
 static int gpt_partition(int fd, const uint8_t *guid, unsigned pn, uint64_t *start, uint64_t *len) {
     uint8_t header[512], entries[128 * 128];
-    if (preadn(fd, header, sizeof header, 512) != 0 || memcmp(header, "EFI PART", 8) ||
+    unsigned sector = 512;
+    struct stat statbuf;
+    if (fstat(fd, &statbuf) != 0) return -1;
+    if (S_ISBLK(statbuf.st_mode)) {
+        if (ioctl(fd, BLKSSZGET, &sector) || (sector != 512 && sector != 4096)) return -1;
+    } else if (preadn(fd, header, sizeof header, 512) || memcmp(header, "EFI PART", 8)) sector = 4096;
+    if (preadn(fd, header, sizeof header, sector) != 0 || memcmp(header, "EFI PART", 8) ||
         le32(header + 12) != 92 || le64(header + 24) != 1 || le64(header + 72) != 2 ||
         le32(header + 80) != 128 || le32(header + 84) != 128) return -1;
+    uint64_t disk_bytes = statbuf.st_size;
+    if (S_ISBLK(statbuf.st_mode) && ioctl(fd, BLKGETSIZE64, &disk_bytes)) return -1;
+    if (le64(header + 40) < 2 + sizeof entries / sector || le64(header + 48) >= disk_bytes / sector ||
+        le64(header + 48) < le64(header + 40)) return -1;
     uint32_t sum = le32(header + 16);
     memset(header + 16, 0, 4);
-    if (gpt_crc(header, 92) != sum || preadn(fd, entries, sizeof entries, 1024) != 0 ||
+    if (gpt_crc(header, 92) != sum || preadn(fd, entries, sizeof entries, 2 * sector) != 0 ||
         gpt_crc(entries, sizeof entries) != le32(header + 88)) return -1;
     for (unsigned i = 0; i < 128; i++) {
         const uint8_t *e = entries + i * 128;
         if (guid ? memcmp(e + 16, guid, 16) != 0 : i + 1 != pn) continue;
         uint64_t first = le64(e + 32), last = le64(e + 40);
         if (first < le64(header + 40) || last < first || last > le64(header + 48)) return -1;
-        *start = first; *len = last - first + 1;
+        if (last >= UINT64_MAX / (sector / 512)) return -1;
+        *start = first * (sector / 512); *len = (last - first + 1) * (sector / 512);
         return 0;
     }
     return -1;
@@ -603,7 +623,7 @@ static int dm_create(const struct disk *disk, const struct runs *r, uint64_t siz
     uint64_t sector = 0, left = (size + 511) / 512;
     for (size_t i = 0; i < r->n && left; i++) {
         struct dm_target_spec *t = (struct dm_target_spec *)(buf + pos);
-        uint64_t len = r->v[i].len / 512;
+        uint64_t len = (r->v[i].len + 511) / 512;
         if (len > left) len = left;
         t->sector_start = sector;
         t->length = len;
@@ -686,6 +706,125 @@ static int loop_create(const struct disk *disk, const struct runs *r, uint64_t s
 }
 
 /* ------------------------------------------------------------------ worker */
+
+/* Alternative data filesystems use the kernel's own implementation. The loop
+ * device pins the opened file and its mount even when this private namespace exits.
+ * Using the real partition node avoids mounting a second superblock through a
+ * whole-disk loop alias of an already mounted filesystem. */
+static int mount_data(const struct disk *disk, int writable) {
+    char dir[256], node[256], text[64];
+    snprintf(dir, sizeof dir, SYS "/block/%s", disk->name);
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    struct dirent *e;
+    int found = 0;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char p[512];
+        snprintf(p, sizeof p, "%s/%s/start", dir, e->d_name);
+        if (read_text(p, text, sizeof text) || strtoull(text, NULL, 10) != disk->part_start) continue;
+        snprintf(p, sizeof p, "%s/%s/size", dir, e->d_name);
+        if (read_text(p, text, sizeof text) || strtoull(text, NULL, 10) != disk->part_len) continue;
+        snprintf(node, sizeof node, DEV "/%s", e->d_name);
+        found = 1; break;
+    }
+    closedir(d);
+    if (!found) return -1;
+    mkdir(BASE "/data", 0700);
+    const char *deps[] = {"nls_cp437", "nls_iso8859_1", "crc16", "crc32c_generic", "crc32c_intel", "libcrc32c", "mbcache", "jbd2"};
+    for (size_t i = 0; i < sizeof deps / sizeof deps[0]; i++) load_module(deps[i], deps[i]);
+    const char *types[] = {"ntfs3", "ext4", "xfs", "udf", "ntfs"};
+    for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) {
+        load_module(types[i], types[i]);
+        if (mount(node, BASE "/data", types[i], MS_NODEV | MS_NOSUID | (writable ? 0 : MS_RDONLY), NULL) == 0) {
+            logmsg("data partition mounted with %s\n", types[i]);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int loop_file(const char *path, int writable, char sysblock[32]) {
+    int dir = open(BASE "/data", O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (dir < 0) return -1;
+    while (*path == '/') path++;
+    struct open_how how = { .flags = (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC,
+                           .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS };
+    int file = syscall(SYS_openat2, dir, path, &how, sizeof how);
+    close(dir);
+    struct stat st;
+    if (file < 0) return -1;
+    if (fstat(file, &st) || !S_ISREG(st.st_mode) || st.st_size <= 0) { close(file); return -1; }
+    load_module("loop", "loop");
+    int ctl = open(DEV "/loop-control", O_RDWR | O_CLOEXEC);
+    int n = ctl < 0 ? -1 : ioctl(ctl, LOOP_CTL_GET_FREE);
+    if (ctl >= 0) close(ctl);
+    if (n < 0) { close(file); return -1; }
+    char node[128];
+    snprintf(node, sizeof node, DEV "/loop%d", n);
+    int loop = open(node, O_RDWR | O_CLOEXEC);
+    struct loop_config cfg = {0};
+    cfg.fd = file;
+    cfg.info.lo_flags = writable ? 0 : LO_FLAGS_READ_ONLY;
+    cfg.info.lo_sizelimit = st.st_size;
+    int rc = loop < 0 ? -1 : ioctl(loop, LOOP_CONFIGURE, &cfg);
+    if (loop >= 0) close(loop);
+    close(file);
+    if (rc) return -1;
+    snprintf(sysblock, 32, "loop%d", n);
+    return 0;
+}
+
+static int map_file(const struct disk *disk, const struct runs *runs, uint64_t size, const char *dmname,
+                    const char *what, int writable, int force_dm, char sysblock[32]);
+
+/* Returns 1 if absent, -1 if malformed, 0 if valid. Offsets are partition-relative
+ * bytes even on 4Kn media, matching GRUB's internal 512-byte disk addressing. */
+static int parse_file_map(const struct disk *disk, FILE *f, struct runs *runs, uint64_t *size) {
+    unsigned long long bytes, count, off, len; uint64_t total = 0;
+    int rc = -1;
+    if (fscanf(f, "GBMAP1 %llu %llu", &bytes, &count) != 2 || !bytes || !count || count > 65536) goto done;
+    for (unsigned long long i = 0; i < count; i++) {
+        if (fscanf(f, "%llu %llu", &off, &len) != 2 || !len || (off & 511) ||
+            (i + 1 < count && (len & 511)) || off > disk->part_len * 512 ||
+            len > disk->part_len * 512 - off || total > bytes || len > bytes - total ||
+            runs_add(runs, off, len)) goto done;
+        total += len;
+    }
+    if (total != bytes) goto done;
+    *size = bytes; rc = 0;
+done:
+    return rc;
+}
+static int read_file_map(const struct disk *disk, const char *name, struct runs *runs, uint64_t *size) {
+    const char *kind = !strcmp(name, DM_NAME) ? "iso" : !strcmp(name, DM_NAME "-seed") ? "seed" : "persist";
+    char path[128]; snprintf(path, sizeof path, BASE "/%s.map", kind);
+    FILE *f = fopen(path, "r");
+    if (!f) return errno == ENOENT ? 1 : -1;
+    int rc = parse_file_map(disk, f, runs, size);
+    fclose(f); return rc;
+}
+
+static int source_file(const struct disk *disk, struct exfat *fs, int native,
+                       const char *path, int writable, const char *name, char sysblock[32]) {
+    if (native && writable) {
+        if (native == 2 && mount_data(disk, 1)) return -1;
+        return loop_file(path, writable, sysblock);
+    }
+    struct runs runs = {0}; uint64_t size;
+    int rc = read_file_map(disk, name, &runs, &size);
+    if (rc == 1) {
+        if (native == 1) { free(runs.v); return loop_file(path, writable, sysblock); }
+        rc = native == 2 ? -1 : exfat_find(fs, path, &runs, &size);
+    }
+    if (!rc) rc = map_file(disk, &runs, size, name, path, writable, writable, sysblock);
+    free(runs.v);
+    if (rc && native == 2) {
+        logmsg("physical mapping unavailable; trying a filesystem-backed loop\n");
+        if (mount_data(disk, writable) == 0) return loop_file(path, writable, sysblock);
+    }
+    return rc;
+}
 
 static void nudge_udev(char sysblocks[][32], int count) {
     /* Repeat for a while: udevd may not be running yet when we create the devices. */
@@ -780,6 +919,25 @@ static void worker(void) {
         _exit(1);
 
     if (parse_cmdline() != 0) { logmsg("missing glassboot.iso / glassboot.part\n"); _exit(1); }
+    if (alpine_bootstrap) {
+        /* Alpine's nlplug-findfs can complete before an asynchronously created
+           loop/dm device exists. Coldplug storage now, with its own modprobe so
+           dependencies are honored, while PID 1 waits for the ready notification. */
+        mkdir("/proc", 0755); mkdir("/sys", 0755);
+        mount(PROC, "/proc", NULL, MS_BIND, NULL);
+        mount(SYS, "/sys", NULL, MS_BIND, NULL);
+        pid_t child = fork();
+        if (child == 0) {
+            int null = open("/dev/null", O_WRONLY);
+            if (null >= 0) { dup2(null, 1); dup2(null, 2); close(null); }
+            const char *programs[] = {"/sbin/modprobe", "/usr/sbin/modprobe"};
+            for (unsigned i = 0; i < 2; i++)
+                execl(programs[i], "modprobe", "-a", "-q", "xhci_pci", "ehci_pci", "ohci_pci", "uhci_hcd",
+                      "usb_storage", "sd_mod", "ahci", "ata_piix", "nvme", "virtio_pci", "virtio_blk", NULL);
+            _exit(1);
+        }
+        if (child > 0) while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+    }
     logmsg("looking for %s (%s partition identifier)\n", opt_iso, opt_gpt ? "GPT" : "MBR");
 
     struct disk disk;
@@ -792,16 +950,16 @@ static void worker(void) {
            (unsigned long long)disk.part_start);
 
     struct exfat fs;
-    struct runs runs = {0};
-    uint64_t size = 0;
-    if (exfat_open(&fs, disk.fd, disk.part_start) != 0 || exfat_find(&fs, opt_iso, &runs, &size) != 0) {
-        logmsg("could not locate %s\n", opt_iso);
+    int native = exfat_open(&fs, disk.fd, disk.part_start) != 0;
+    if (native && access(BASE "/iso.map", R_OK) == 0) native = 2;
+    if (native == 1 && mount_data(&disk, opt_persist[0] != 0)) {
+        logmsg("cannot mount data filesystem; include its kernel driver in the ISO initrd\n");
         _exit(1);
     }
 
-    char sysblocks[2][32];
+    char sysblocks[3][32];
     int ndev = 0;
-    if (map_file(&disk, &runs, size, DM_NAME, opt_iso, 0, 0, sysblocks[ndev]) != 0) {
+    if (source_file(&disk, &fs, native, opt_iso, 0, DM_NAME, sysblocks[ndev]) != 0) {
         logmsg("could not create a device for the ISO\n");
         _exit(1);
     }
@@ -815,11 +973,7 @@ static void worker(void) {
      * device-mapper (see map_file). The distribution finds it by its file-system label
      * (casper-rw, persistence, ...) as if it were a partition. */
     if (opt_persist[0]) {
-        struct runs pruns = {0};
-        uint64_t psize = 0;
-        if (exfat_find(&fs, opt_persist, &pruns, &psize) != 0) {
-            logmsg("persistence file %s not found\n", opt_persist);
-        } else if (map_file(&disk, &pruns, psize, DM_NAME "-persist", opt_persist, 1, 1, sysblocks[ndev]) == 0) {
+        if (source_file(&disk, &fs, native, opt_persist, 1, DM_NAME "-persist", sysblocks[ndev]) == 0) {
             unlink(DEV "/glassboot-persist");
             if (symlink(sysblocks[ndev], DEV "/glassboot-persist") == 0)
                 logmsg("/dev/glassboot-persist -> %s\n", sysblocks[ndev]);
@@ -828,6 +982,19 @@ static void worker(void) {
         } else {
             logmsg("could not map persistence file %s\n", opt_persist);
         }
+    }
+    if (opt_seed[0]) {
+        if (source_file(&disk, &fs, native, opt_seed, 0, DM_NAME "-seed", sysblocks[ndev]) == 0) {
+            mkdir(DEV "/disk", 0755); mkdir(DEV "/disk/by-label", 0755);
+            char target[64]; snprintf(target, sizeof target, "../../%s", sysblocks[ndev]);
+            unlink(DEV "/disk/by-label/CIDATA");
+            if (symlink(target, DEV "/disk/by-label/CIDATA")) logmsg("could not create CIDATA link\n");
+            ndev++;
+        } else logmsg("cannot map NoCloud seed %s\n", opt_seed);
+    }
+    if (ready_fd >= 0) {
+        if (write(ready_fd, "1", 1) != 1) logmsg("could not signal media readiness\n");
+        close(ready_fd); ready_fd = -1;
     }
     nudge_udev(sysblocks, ndev);
     _exit(0);
@@ -865,8 +1032,20 @@ static int test_mode(int argc, char **argv) {
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--test")) return test_mode(argc, argv);
     if (getpid() == 1) {
+        char init[65536];
+        int pipefd[2] = {-1,-1};
+        alpine_bootstrap = read_text("/init", init, sizeof init) == 0 && strstr(init, "Alpine Init") != NULL;
+        if (alpine_bootstrap && pipe(pipefd) != 0) alpine_bootstrap = 0;
         pid_t pid = fork();
-        if (pid == 0) worker();
+        if (pid == 0) {
+            if (alpine_bootstrap) { close(pipefd[0]); ready_fd = pipefd[1]; }
+            worker();
+        }
+        if (alpine_bootstrap) {
+            close(pipefd[1]);
+            if (pid > 0) { char ready; while (read(pipefd[0], &ready, 1) < 0 && errno == EINTR) {} }
+            close(pipefd[0]);
+        }
         /* Parent: become the distribution's init. */
         argv[0] = "/init";
         execv("/init", argv);

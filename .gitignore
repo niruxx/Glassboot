@@ -1,5 +1,7 @@
 /build/
 /out/
+/dist/
+__pycache__/
 *.img
 *.iso
 /Utility-Source/build*/

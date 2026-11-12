@@ -56,6 +56,9 @@ void update(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb
 struct InstallOptions {
     bool gpt = false; // UEFI-only; MBR remains the default for Legacy BIOS.
     uint64_t reserveBytes = 0; // unallocated space after the ESP (before backup GPT)
+    bool preserveData = false; // MBR p1 NTFS/exFAT; no formatting, no shrink unless opted in
+    bool shrinkNtfs = false; // explicitly allow Linux ntfsresize to make tail space
+    std::string dataFilesystem = "exfat"; // other formats: Linux formatter tools
 };
 void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel,
              const InstallOptions& options = {});

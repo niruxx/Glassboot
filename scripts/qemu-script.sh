@@ -22,11 +22,22 @@ snap=",snapshot=on"
 [[ "${QEMU_WRITABLE:-}" == 1 ]] && snap=""
 args=(-machine q35 -m "${QEMU_MEM:-4096}" -smp 2 -display none -monitor stdio
       -device qemu-xhci,id=xhci
-      -drive "if=none,id=stick,format=raw,file=$img$snap"
-      -device usb-storage,bus=xhci.0,drive=stick,bootindex=0)
+      -drive "if=none,id=stick,format=raw,file=$img$snap")
+if [[ "${QEMU_DISK_BUS:-usb}" == nvme ]]; then
+  args+=(-device "nvme,drive=stick,serial=glassboot-test,bootindex=0,logical_block_size=${QEMU_SECTOR_SIZE:-512},physical_block_size=${QEMU_SECTOR_SIZE:-512}")
+else
+  args+=(-device "usb-storage,bus=xhci.0,drive=stick,bootindex=0,logical_block_size=${QEMU_SECTOR_SIZE:-512},physical_block_size=${QEMU_SECTOR_SIZE:-512}")
+fi
 [[ -w /dev/kvm ]] && args+=(-enable-kvm -cpu host)
 # QEMU_SERIAL=FILE: capture the guest's serial console (ttyS0) into FILE.
-[[ -n "${QEMU_SERIAL:-}" ]] && args+=(-serial "file:$QEMU_SERIAL")
+if [[ -n "${QEMU_SERIAL:-}" ]]; then
+  : > "$QEMU_SERIAL"
+  if [[ -n "${QEMU_SERIAL_SOCKET:-}" ]]; then
+    args+=(-chardev "socket,id=uart,path=$QEMU_SERIAL_SOCKET,server=on,wait=off,logfile=$QEMU_SERIAL" -serial chardev:uart)
+  else
+    args+=(-serial "file:$QEMU_SERIAL")
+  fi
+fi
 # QEMU_EXTRA="...": extra arguments, e.g. a target disk for installer tests.
 # shellcheck disable=SC2206
 [[ -n "${QEMU_EXTRA:-}" ]] && args+=($QEMU_EXTRA)
@@ -67,6 +78,19 @@ keyname() {
       keys:*) n="${a#keys:}"; k="${n#*:}"; n="${n%%:*}"
               for ((i = 0; i < n; i++)); do echo "sendkey $k"; sleep 0.3; done ;;
       shot:*) echo "screendump ${a#shot:} -f png"; sleep 0.5 ;;
+      serial:*) python3 - "$QEMU_SERIAL_SOCKET" "${a#serial:}" <<'PY'
+import socket,sys
+with socket.socket(socket.AF_UNIX) as channel:
+    channel.connect(sys.argv[1]); channel.settimeout(3)
+    channel.sendall((sys.argv[2]+'\n').encode())
+    # Keep the channel alive while the emulated UART consumes its input queue.
+    try:
+        while channel.recv(65536):
+            pass
+    except socket.timeout:
+        pass
+PY
+                ;;
       *) echo "unknown action $a" >&2 ;;
     esac
   done

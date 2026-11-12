@@ -19,7 +19,7 @@ Legend: ✅ done · 🔨 in progress · ⬜ planned
 | ✅ Legacy BIOS + UEFI x86_64 + UEFI ia32 boot from one drive | MBR, GRUB `core.img` in the gap, FAT16 ESP |
 | ✅ Drag-and-drop exFAT data partition | Files over 4 GB supported, readable on Windows, macOS and Linux |
 | ✅ Reproducible, verified build of GRUB and wimboot from source | SHA-256 + GPG for GRUB, pinned commit for wimboot |
-| ✅ Qt 6 installer (Windows/Linux) + CLI | Lists compatible drives, formats, verifies by reading back |
+| ✅ Qt 6 installer (Windows/Linux) + CLI | Liquid-glass welcome / USB / install flow, custom title bar, animated transitions, and a fixed status/action dock; scales to the screen, formats and verifies by reading back |
 | ✅ Known-layout Linux boot | `loopback.cfg`, casper, live-boot, archiso, dracut |
 | ✅ Windows installer ISOs via wimboot + WinPE helper | Tested with real ISOs in Phase 2 |
 
@@ -48,7 +48,7 @@ per-distro support, because the ISO file itself is presented to the OS as a disk
 | ✅ `.efi` applications on the drive (UEFI) | Ventoy | Listed and chainloaded |
 | ✅ Windows Server and WinPE-based tool discs | Ventoy | Tested: Windows Server 2025 Setup (UEFI + BIOS); Hiren's BootCD PE full desktop with its ISO mounted (UEFI). Discs without `install.wim` run in *tool mode*: the disc's own WinPE start-up runs, and Glassboot only mounts the ISO first. Limit: on Legacy BIOS, WinPE images too large for wimboot's memory (Hiren's 1.9 GB `boot.wim`) don't start |
 | ⬜ Windows 10 installer ISO | Ventoy | Same path as Windows 11 and Server; not tested yet |
-| ⬜ Linux unattended installs: kickstart, preseed, autoinstall, autoyast | Ventoy *auto_install* plugin | Extra kernel arguments through the hook |
+| 🔨 Linux unattended installs: kickstart, preseed, autoinstall, autoyast | Ventoy *auto_install* plugin | Per-ISO answer injection and kernel arguments; NoCloud CIDATA seed helper. Real-kernel transport tests pass; full distribution installations remain unverified. See [storage and unattended](docs/STORAGE-AND-UNATTENDED.md) |
 | ✅ **Universal UEFI boot for non-Linux ISOs**: an EFI BlockIo driver presents the ISO as a read-only CD; the firmware's El Torito/FAT drivers find its EFI loader | Ventoy x64 EFI driver | `gb_efi_vdisk_boot` in the GRUB module. Automatic fallback for ISOs with no GRUB/syslinux menu, and a "More boot modes" option. Tested: FreeBSD 15.1 loader + kernel boot from the ISO |
 | ✅ `.img` (raw disk image) and fixed-size `.vhd` boot on UEFI | Ventoy | Same virtual disk (512-byte sectors; firmware parses MBR/GPT). Tested: FreeBSD `mini-memstick.img` |
 | ✅ `.wim` (Windows PE images) on UEFI and BIOS | Ventoy | wimboot; BCD and `boot.sdi` are taken from inside the image |
@@ -72,32 +72,32 @@ per-distro support, because the ISO file itself is presented to the OS as a disk
 | ✅ Persistence (`.dat` overlay files per ISO) | Ventoy *persistence* plugin, Rufus | The hook maps the file read-write through device-mapper and adds `/dev/disk/by-label` links. Tested: Debian live (live-boot) and Arch (archiso). Ubuntu (casper) untested |
 | ✅ Menu password protection | Ventoy *password* plugin | GRUB `password_pbkdf2`; the installer creates the hash |
 | ✅ Boot an installed OS | Ventoy F4, Super GRUB2 Disk | UEFI: finds Windows Boot Manager and `\EFI\<vendor>` loaders on other disks through the firmware, then starts them with LoadImage. BIOS: chainloads other disks |
-| ✅ Settings editor in the installer | VentoyPlugson | Qt dialog that edits `glassboot.cfg` and keeps comments. Creates persistence files on Linux; on Windows they still need Linux |
-| ✅ Translations | Ventoy | Spanish installer catalog (123 messages) selected by system language; boot-menu gettext catalog via `language = es`. ISO-provided menus and low-level diagnostics retain their own language |
+| ✅ Settings editor in the installer | VentoyPlugson | Qt dialog opened with `--settings DIR` that edits `glassboot.cfg` and keeps comments. Creates persistence files on Linux; on Windows they still need Linux |
+| ✅ Translations | Ventoy | Spanish installer catalog selected by system language; boot-menu gettext catalog via `language = es`. ISO-provided menus and low-level diagnostics retain their own language |
 
 ## Phase 4: Platform coverage 🔨
 
 | Feature | Ventoy / others | Notes |
 |---|---|---|
 | ⬜ **Secure Boot**: shim + Glassboot key, one-time MOK enrolment | Ventoy (via its own shim/MOK chain) | Our key and signed GRUB; reproducible signing ceremony |
-| ⬜ ARM64 UEFI | Ventoy | GRUB `arm64-efi` |
-| ✅ GPT layout option (needed by some UEFI-only firmware) | Ventoy | GUI + CLI `--gpt`; UEFI only, 512-byte logical sectors. CRC-checked primary/backup tables; update preserves layout. MBR remains default |
-| ⬜ NTFS / ext4 / XFS / UDF data partition options | Ventoy | exFAT stays default |
-| ⬜ Non-destructive install (add Glassboot to a drive with data) | Ventoy 1.0.80+ | Shrink-and-add on NTFS / exFAT |
-| ✅ Reserve space at end of disk (extra partitions) | Ventoy | GUI MiB field / CLI `--reserve SIZE`, MBR and GPT; updates preserve additional partitions |
-| 🔨 4Kn disks, disks over 2 TiB | | GPT supports full capacity over 2 TiB (3 TiB image tested). 4Kn remains unsupported; requires filesystem/payload/I/O work |
+| ✅ ARM64 UEFI | Ventoy | GRUB `arm64-efi`, `BOOTAA64.EFI`, ARM64 initrd hook and EFI loader discovery. Alpine 3.24.4 aarch64 reaches login in QEMU; ARM Windows helper and physical hardware validation remain. See [ARM64 and PXE](docs/ARM64-AND-NETBOOT.md) |
+| ✅ GPT layout option (needed by some UEFI-only firmware) | Ventoy | CLI `--gpt`; GUI automatically selects GPT for 4Kn and disks over 2 TiB. UEFI only, 512/4096-byte logical sectors. CRC-checked primary/backup tables; update preserves layout. MBR remains default on 512-byte media |
+| ✅ NTFS / ext4 / XFS / UDF data partition options | Ventoy | Linux CLI formatting, seeding and updates tested; UEFI file maps verified byte-for-byte for all four. Alpine 3.24 boots to login from all four. exFAT stays the cross-platform default; Windows formatting remains exFAT only. See [validation](docs/STORAGE-AND-UNATTENDED.md) |
+| 🔨 Non-destructive install (add Glassboot to a drive with data) | Ventoy 1.0.80+ | CLI `--preserve-data`: one MBR NTFS/exFAT partition with free tail, entire partition checksum preserved. Linux `--shrink-ntfs`: checked NTFS shrink-and-add tested. Automatic exFAT shrinking and GPT adoption remain unsupported |
+| ✅ Reserve space at end of disk (extra partitions) | Ventoy | CLI `--reserve SIZE`, MBR and GPT; updates preserve additional partitions |
+| 🔨 4Kn disks, disks over 2 TiB | | GPT/UEFI 4Kn layout, aligned I/O, exFAT, separate FAT ESP and hook GPT lookup implemented. Alpine boots to login through 4Kn NVMe; sparse 3 TiB 4Kn install/check/update passes. OVMF 4Kn USB partition discovery remains limited; physical hardware untested. See [validation](docs/STORAGE-AND-UNATTENDED.md) |
 | ⬜ macOS installer | Ventoy (unofficial) | Same `core/`, raw disk via `/dev/rdiskN` |
 
-## Phase 5: Trust and distribution
+## Phase 5: Trust and distribution 🔨
 
 | Feature | Notes |
 |---|---|
-| ⬜ Bit-for-bit reproducible payload, published hashes per release | Anyone can rebuild and compare |
-| ⬜ Signed releases (minisign/GPG) + SBOM | |
-| ⬜ CI: build everything, boot a matrix of ISOs in QEMU (BIOS + UEFI) with screenshot assertions | Builds on `scripts/qemu-script.sh` (scripted keys + screenshots) |
-| ⬜ Packages: Windows installer (MSI) and portable zip, AppImage / Flatpak / `.deb` | |
-| ⬜ Boot-time self-check: verify ESP files against the payload manifest | Detects a tampered stick |
-| ⬜ PXE / network boot server (like iVentoy) | Same menu, served over the network |
+| 🔨 Bit-for-bit reproducible payload, published hashes per release | Two assemblies from identical built components/toolchain/epoch compare byte-for-byte. FAT timestamps normalized for both sector sizes; local release hashes in `dist/SHA256SUMS`. Independent clean toolchain rebuilds and publication remain. See [releasing](docs/RELEASING.md) |
+| 🔨 Signed releases (minisign/GPG) + SBOM | CycloneDX bundled-file inventories, component pins, provenance, notices and GPG checksum-signing helper implemented. Temporary-key signing test passes. Local builds remain unsigned; production signing requires a maintainer key and license review |
+| 🔨 CI: build everything, boot a matrix of ISOs in QEMU (BIOS + UEFI) with screenshot assertions | Pinned-action workflow builds both packages and boot sources. Local clean/corrupt ESP screenshot tests and pinned Alpine BIOS/UEFI boots pass. GitHub execution and broader distro/Windows fixtures remain |
+| ✅ Packages: Linux AppImage and Windows portable program | Built under `dist/`: x86_64 AppImage and portable Windows directory/ZIP with GUI, CLI, Qt/runtime libraries and verified payload. No MSI/Flatpak/deb. Linux GUI/CLI and Windows CLI smoke tests pass; Windows GUI native build passes |
+| ✅ Boot-time self-check: verify ESP files against the payload manifest | Automatic SHA-256 file verification before the menu; corrupt ESP rejected on BIOS and UEFI. Corruption detection only: mutable verifier/manifest are not an authenticity root or Secure Boot |
+| 🔨 PXE / network boot server (like iVentoy) | Linux server prepares an ISO menu, BIOS/x86 UEFI/ARM64 UEFI loaders, HTTP media and proxy-DHCP/TFTP configuration. Debian Live reaches login over BIOS and x86_64 UEFI PXE; initial Casper / Debian Live profiles. Arbitrary ISO and Windows network boot remain. See [ARM64 and PXE](docs/ARM64-AND-NETBOOT.md) |
 
 ---
 

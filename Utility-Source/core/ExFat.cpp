@@ -14,7 +14,6 @@
 namespace glassboot {
 namespace {
 
-constexpr uint32_t kSector = 512;
 
 void put16(uint8_t* p, uint16_t v) { p[0] = uint8_t(v); p[1] = uint8_t(v >> 8); }
 void put32(uint8_t* p, uint32_t v) { for (int i = 0; i < 4; ++i) p[i] = uint8_t(v >> (8 * i)); }
@@ -176,7 +175,10 @@ std::vector<uint8_t> entrySet(const std::string& name8, bool directory, uint32_t
 } // namespace
 
 void formatExFat(BlockDevice& dev, const ExFatOptions& opt, const std::function<void(double)>& progress) {
-    const uint64_t volSectors = opt.partitionSectors;
+    const uint32_t kSector = opt.bytesPerSector;
+    if ((kSector != 512 && kSector != 4096) || opt.partitionOffsetBytes % kSector || opt.partitionSectors % (kSector / 512))
+        throw Error("unsupported or unaligned exFAT sector geometry");
+    const uint64_t volSectors = opt.partitionSectors / (kSector / 512);
     const uint64_t volBytes = volSectors * kSector;
     if (volBytes < (64ull << 20)) throw Error("exFAT volume too small");
     if (opt.label.size() > 11) throw Error("exFAT label longer than 11 characters");
@@ -186,9 +188,9 @@ void formatExFat(BlockDevice& dev, const ExFatOptions& opt, const std::function<
     const uint32_t spc = clusterBytes / kSector;
     uint8_t spcShift = 0;
     while ((1u << spcShift) < spc) ++spcShift;
-    const uint32_t align = std::max<uint32_t>(spc, 2048); // 1 MiB or one cluster
+    const uint32_t align = std::max<uint32_t>(spc, (1 << 20) / kSector);
 
-    const uint32_t fatOffset = 2048;
+    const uint32_t fatOffset = (1 << 20) / kSector;
     const uint64_t maxClusters = (volSectors - fatOffset) / spc;
     const uint32_t fatLength = uint32_t(divUp((maxClusters + 2) * 4, kSector));
     const uint32_t heapOffset = uint32_t(divUp(uint64_t(fatOffset) + fatLength, align) * align);
@@ -316,7 +318,7 @@ void formatExFat(BlockDevice& dev, const ExFatOptions& opt, const std::function<
     put32(bs + 100, opt.serial);
     put16(bs + 104, 0x0100); // revision 1.00
     put16(bs + 106, 0);      // VolumeFlags
-    bs[108] = 9;             // 512-byte sectors
+    bs[108] = kSector == 4096 ? 12 : 9;
     bs[109] = spcShift;
     bs[110] = 1;             // one FAT
     bs[111] = 0x80;
@@ -324,8 +326,8 @@ void formatExFat(BlockDevice& dev, const ExFatOptions& opt, const std::function<
     std::memset(bs + 120, 0xF4, 390); // boot code: hlt (this volume is not bootable)
     bs[510] = 0x55; bs[511] = 0xAA;
     for (int s = 1; s <= 8; ++s) { // extended boot sectors
-        bs[s * kSector + 510] = 0x55;
-        bs[s * kSector + 511] = 0xAA;
+        bs[(s + 1) * kSector - 2] = 0x55;
+        bs[(s + 1) * kSector - 1] = 0xAA;
     }
     // Sectors 9 (OEM parameters) and 10 (reserved) stay zero.
     uint32_t sum = bootChecksum(bs, 11 * kSector);

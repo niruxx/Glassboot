@@ -28,28 +28,29 @@ void entry(uint8_t* p, const uint8_t* type, uint64_t start, uint64_t sectors, co
     for(size_t i=0;name[i] && i<36;i++) p[56+2*i]=uint8_t(name[i]);
 }
 void header(uint8_t* p, uint64_t at, uint64_t other, uint64_t end, uint64_t table,
-            const uint8_t* diskGuid, uint32_t tableCrc) {
+            const uint8_t* diskGuid, uint32_t tableCrc, uint32_t ss) {
     std::memcpy(p,"EFI PART",8); put32(p+8,0x10000); put32(p+12,92);
-    put64(p+24,at); put64(p+32,other); put64(p+40,34); put64(p+48,end-33);
+    put64(p+24,at); put64(p+32,other); put64(p+40,2+tableBytes/ss); put64(p+48,end-1-tableBytes/ss);
     std::memcpy(p+56,diskGuid,16); put64(p+72,table);
     put32(p+80,128); put32(p+84,128); put32(p+88,tableCrc); put32(p+16,crc(p,92));
 }
-bool validHeader(uint8_t* p, uint64_t at, uint64_t other, uint64_t table, uint64_t end) {
+bool validHeader(uint8_t* p, uint64_t at, uint64_t other, uint64_t table, uint64_t end, uint32_t ss) {
     if(std::memcmp(p,"EFI PART",8) || get32(p+8)!=0x10000 || get32(p+12)!=92 || get32(p+20)!=0 ||
-       get64(p+24)!=at || get64(p+32)!=other || get64(p+40)!=34 || get64(p+48)!=end-33 ||
+       get64(p+24)!=at || get64(p+32)!=other || get64(p+40)!=2+tableBytes/ss || get64(p+48)!=end-1-tableBytes/ss ||
        get64(p+72)!=table || get32(p+80)!=128 || get32(p+84)!=128) return false;
     uint32_t want=get32(p+16); put32(p+16,0);
     bool ok=crc(p,92)==want; put32(p+16,want); return ok;
 }
 }
-Layout computeGptLayout(uint64_t diskBytes, uint32_t espMb, uint64_t reserveBytes) {
+Layout computeGptLayout(uint64_t diskBytes, uint32_t espMb, uint64_t reserveBytes, uint32_t sectorSize) {
+    if (sectorSize != 512 && sectorSize != 4096) throw Error("unsupported GPT sector size");
     Layout l;
     l.totalSectors=diskBytes/512;
     l.dataStart=2048;
     l.espSectors=uint64_t(espMb)*2048;
-    if(reserveBytes>diskBytes || l.totalSectors<34) throw Error("disk too small for GPT and reserved space");
+    if(reserveBytes>diskBytes || l.totalSectors<2*(tableBytes/sectorSize+2)*(sectorSize/512)) throw Error("disk too small for GPT and reserved space");
     uint64_t reserved=reserveBytes/512+(reserveBytes%512!=0);
-    uint64_t available=l.totalSectors-33;
+    uint64_t available=l.totalSectors-(tableBytes/sectorSize+1)*(sectorSize/512);
     if(reserved>available || available-reserved<l.dataStart+l.espSectors+256ull*2048)
         throw Error("disk too small for GPT, data, ESP and reserved space");
     l.dataSectors=(available-reserved-l.dataStart-l.espSectors)/2048*2048;
@@ -57,35 +58,37 @@ Layout computeGptLayout(uint64_t diskBytes, uint32_t espMb, uint64_t reserveByte
     return l;
 }
 void writeGpt(BlockDevice& dev, const Layout& l) {
-    AlignedBuffer table(tableBytes), primary(512), backup(512), mbr(512);
+    const uint32_t ss=dev.logicalSectorSize(), scale=ss/512;
+    AlignedBuffer table(tableBytes), primary(ss), backup(ss), mbr(ss);
     table.clear(); primary.clear(); backup.clear(); mbr.clear();
-    entry(table.data(),basicData,l.dataStart,l.dataSectors,"GLASSBOOT");
-    entry(table.data()+128,espType,l.espStart,l.espSectors,"GLASS_EFI");
+    entry(table.data(),basicData,l.dataStart/scale,l.dataSectors/scale,"GLASSBOOT");
+    entry(table.data()+128,espType,l.espStart/scale,l.espSectors/scale,"GLASS_EFI");
     uint8_t diskGuid[16]; guid(diskGuid);
-    uint64_t end=l.totalSectors-1;
+    uint64_t end=l.totalSectors/scale-1, tableSectors=tableBytes/ss;
     uint32_t sum=crc(table.data(),tableBytes);
-    header(primary.data(),1,end,end,2,diskGuid,sum);
-    header(backup.data(),end,1,end,end-32,diskGuid,sum);
+    header(primary.data(),1,end,end,2,diskGuid,sum,ss);
+    header(backup.data(),end,1,end,end-tableSectors,diskGuid,sum,ss);
     uint8_t* e=mbr.data()+446; e[4]=0xEE; e[2]=2;
     e[5]=0xFF; e[6]=0xFF; e[7]=0xFF;
     put32(e+8,1); put32(e+12,uint32_t(std::min<uint64_t>(end,0xFFFFFFFFull)));
     mbr.data()[510]=0x55; mbr.data()[511]=0xAA;
-    dev.write((end-32)*512,table.data(),tableBytes); dev.write(end*512,backup.data(),512);
-    dev.write(1024,table.data(),tableBytes); dev.write(512,primary.data(),512);
-    dev.write(0,mbr.data(),512);
+    dev.write((end-tableSectors)*ss,table.data(),tableBytes); dev.write(end*ss,backup.data(),ss);
+    dev.write(2*ss,table.data(),tableBytes); dev.write(ss,primary.data(),ss);
+    dev.write(0,mbr.data(),ss);
 }
 bool readGpt(BlockDevice& dev, Layout& l) {
-    uint64_t total=dev.sizeBytes()/512;
+    const uint32_t ss=dev.logicalSectorSize(), scale=ss/512;
+    uint64_t total=dev.sizeBytes()/ss, tableSectors=tableBytes/ss;
     if(total<4096) return false;
     uint64_t end=total-1;
-    AlignedBuffer primary(512),backup(512),table(tableBytes),other(tableBytes),mbr(512);
-    dev.read(0,mbr.data(),512);
+    AlignedBuffer primary(ss),backup(ss),table(tableBytes),other(tableBytes),mbr(ss);
+    dev.read(0,mbr.data(),ss);
     if(mbr.data()[510]!=0x55 || mbr.data()[511]!=0xAA || mbr.data()[450]!=0xEE ||
        get32(mbr.data()+454)!=1 || get32(mbr.data()+458)!=std::min<uint64_t>(end,0xFFFFFFFFull)) return false;
-    dev.read(512,primary.data(),512); dev.read(end*512,backup.data(),512);
-    if(!validHeader(primary.data(),1,end,2,end) || !validHeader(backup.data(),end,1,end-32,end) ||
+    dev.read(ss,primary.data(),ss); dev.read(end*ss,backup.data(),ss);
+    if(!validHeader(primary.data(),1,end,2,end,ss) || !validHeader(backup.data(),end,1,end-tableSectors,end,ss) ||
        std::memcmp(primary.data()+56,backup.data()+56,16) || get32(primary.data()+88)!=get32(backup.data()+88)) return false;
-    dev.read(1024,table.data(),tableBytes); dev.read((end-32)*512,other.data(),tableBytes);
+    dev.read(2*ss,table.data(),tableBytes); dev.read((end-tableSectors)*ss,other.data(),tableBytes);
     if(crc(table.data(),tableBytes)!=get32(primary.data()+88) || std::memcmp(table.data(),other.data(),tableBytes)) return false;
     const uint8_t *a=table.data(), *b=a+128;
     if(std::memcmp(a,basicData,16) || std::memcmp(b,espType,16)) return false;
@@ -95,7 +98,7 @@ bool readGpt(BlockDevice& dev, Layout& l) {
         bool used=false; for(int k=0;k<16;k++) used|=e[k]!=0;
         if(!used) continue;
         uint64_t start=get64(e+32),stop=get64(e+40);
-        if(start<34 || stop<start || stop>end-33) return false;
+        if(start<2+tableSectors || stop<start || stop>end-1-tableSectors) return false;
         // The boot gap contains our marker; only tail space is available to extras.
         if(i>=2 && start<=get64(b+40)) return false;
         for(size_t j=0;j<i;j++) {
@@ -104,8 +107,8 @@ bool readGpt(BlockDevice& dev, Layout& l) {
             if(occupied && start<=get64(prev+40) && get64(prev+32)<=stop) return false;
         }
     }
-    l={}; l.totalSectors=total; l.dataStart=get64(a+32); l.espStart=get64(b+32);
-    l.dataSectors=get64(a+40)-l.dataStart+1; l.espSectors=get64(b+40)-l.espStart+1;
+    l={}; l.totalSectors=total*scale; l.dataStart=get64(a+32)*scale; l.espStart=get64(b+32)*scale;
+    l.dataSectors=(get64(a+40)-get64(a+32)+1)*scale; l.espSectors=(get64(b+40)-get64(b+32)+1)*scale;
     return l.dataStart==2048 && l.dataSectors>=256ull*2048 && l.espSectors>=2048 &&
            l.espStart==l.dataStart+l.dataSectors;
 }

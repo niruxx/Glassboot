@@ -26,6 +26,10 @@ const char* kindName(Config::Kind k) {
     case Config::Kind::Args: return "args";
     case Config::Kind::Persist: return "persist";
     case Config::Kind::Class: return "class";
+    case Config::Kind::Kickstart: return "kickstart";
+    case Config::Kind::Preseed: return "preseed";
+    case Config::Kind::Autoinstall: return "autoinstall";
+    case Config::Kind::AutoYast: return "autoyast";
     }
     return "";
 }
@@ -37,6 +41,10 @@ bool kindFromName(const std::string& name, Config::Kind& k) {
     else if (n == "args") k = Config::Kind::Args;
     else if (n == "persist") k = Config::Kind::Persist;
     else if (n == "class") k = Config::Kind::Class;
+    else if (n == "kickstart") k = Config::Kind::Kickstart;
+    else if (n == "preseed") k = Config::Kind::Preseed;
+    else if (n == "autoinstall") k = Config::Kind::Autoinstall;
+    else if (n == "autoyast") k = Config::Kind::AutoYast;
     else return false;
     return true;
 }
@@ -107,7 +115,7 @@ Config Config::parse(const std::string& textIn) {
                     if (eq != std::string::npos) {
                         it.path = normPath(rest.substr(0, eq));
                         it.value = trim(rest.substr(eq + 1));
-                        if (kind == Kind::Persist) it.value = normPath(it.value);
+                        if (kind == Kind::Persist || kind >= Kind::Kickstart) it.value = normPath(it.value);
                     }
                 }
                 if (!it.path.empty()) {
@@ -152,7 +160,7 @@ std::string Config::value(Kind kind, const std::string& path) const {
 
 void Config::setValue(Kind kind, const std::string& path, const std::string& valueIn) {
     std::string value = trim(valueIn);
-    if (kind == Kind::Persist && !value.empty()) value = normPath(value);
+    if ((kind == Kind::Persist || kind >= Kind::Kickstart) && !value.empty()) value = normPath(value);
     std::string lp = lower(normPath(path));
     auto it = std::find_if(items_.begin(), items_.end(),
                            [&](const Item& i) { return i.kind == kind && lower(i.path) == lp; });

@@ -90,6 +90,10 @@ Payload Payload::load(const std::string& dir) {
     verify("core.img", &p.core);
     p.espImagePath = join(dir, "esp.img");
     p.espImageSize = verify("esp.img", nullptr);
+    if (files.count("esp4k.img")) {
+        if (verify("esp4k.img", nullptr) != p.espImageSize) throw Error("esp4k.img size differs from esp.img");
+        p.esp4kImagePath = join(dir, "esp4k.img");
+    }
 
     if (p.mbr.size() != 512) throw Error("mbr.bin must be 512 bytes");
     if (p.core.size() < 1024 || p.core.size() > 2047 * 512) throw Error("core.img has an unexpected size");

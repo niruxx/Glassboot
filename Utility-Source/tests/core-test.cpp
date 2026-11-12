@@ -96,6 +96,12 @@ static void testConfig() {
     Config roundtrip = Config::parse(icons.serialize());
     CHECK(roundtrip.value(Config::Kind::Class, "/Linux/a.iso") == "ubuntu");
     CHECK(roundtrip.global("language") == "es");
+    for (auto kind : {Config::Kind::Kickstart, Config::Kind::Preseed, Config::Kind::Autoinstall, Config::Kind::AutoYast}) {
+        Config answer;
+        answer.setValue(kind, "/Linux/Installer.iso", "answers\\server.cfg");
+        auto parsed = Config::parse(answer.serialize());
+        CHECK(parsed.value(kind, "/linux/installer.ISO") == "/answers/server.cfg");
+    }
 }
 
 int main(int argc, char** argv) {

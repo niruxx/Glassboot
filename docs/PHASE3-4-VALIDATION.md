@@ -10,8 +10,9 @@ Implemented in this pass:
 - GPT detection and updates that preserve partition tables, data and extra tail partitions.
 - GPT partition-GUID matching in the Linux initrd hook.
 
-Secure Boot and the macOS installer were not changed. ARM64, alternative data
-filesystems, non-destructive installation and 4Kn remain future Phase 4 work.
+Secure Boot and the macOS installer were not changed in this baseline. Later work
+on data filesystems, non-destructive installation and 4Kn is covered in
+[Storage and unattended installs](STORAGE-AND-UNATTENDED.md). ARM64 remains planned.
 
 ## Validation
 

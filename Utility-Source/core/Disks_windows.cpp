@@ -209,7 +209,7 @@ std::vector<DiskInfo> listDisks() {
 
 std::unique_ptr<BlockDevice> openDisk(const DiskInfo& disk) {
     if (disk.system) throw Error(disk.id + " holds the running system; refusing");
-    if (disk.sectorSize != 512) throw Error("only disks with 512-byte logical sectors are supported");
+    if (disk.sectorSize != 512 && disk.sectorSize != 4096) throw Error("unsupported logical sector size");
     const std::string prefix = "\\\\.\\PhysicalDrive";
     if (disk.id.rfind(prefix, 0) != 0) throw Error("bad disk id " + disk.id);
     DWORD number = DWORD(std::stoul(disk.id.substr(prefix.size())));
@@ -239,14 +239,14 @@ std::unique_ptr<BlockDevice> openDisk(const DiskInfo& disk) {
             throw Error("cannot dismount " + where + ": " + lastErrorText());
         locked.push_back(std::move(v));
     }
-    return std::make_unique<WindowsDisk>(number, disk.sizeBytes, std::move(locked));
+    return sectorView(std::make_unique<WindowsDisk>(number, disk.sizeBytes, std::move(locked)), disk.sectorSize);
 }
 
 std::unique_ptr<BlockDevice> openDiskReadOnly(const DiskInfo& disk) {
     const std::string prefix = "\\\\.\\PhysicalDrive";
     if (disk.id.rfind(prefix, 0) != 0) throw Error("bad disk id " + disk.id);
     DWORD number = DWORD(std::stoul(disk.id.substr(prefix.size())));
-    return std::make_unique<WindowsDisk>(number, disk.sizeBytes, std::vector<Handle>{}, false);
+    return sectorView(std::make_unique<WindowsDisk>(number, disk.sizeBytes, std::vector<Handle>{}, false), disk.sectorSize);
 }
 
 } // namespace glassboot

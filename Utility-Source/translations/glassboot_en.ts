@@ -350,6 +350,10 @@ Restart the installer with administrator rights?</source>
 <context>
     <name>glassboot::MainWindow</name>
     <message>
+        <source>Data filesystem:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../gui/MainWindow.cpp" line="65"/>
         <source>Glassboot Installer</source>
         <translation type="unfinished"></translation>
@@ -641,5 +645,70 @@ Restart the installer with administrator rights?</source>
         <source>Stop the installation? The drive will be left unusable.</source>
         <translation type="unfinished"></translation>
     </message>
-</context>
+        <message>
+            <source>Welcome to Glassboot</source>
+            <translation>Welcome to Glassboot</translation>
+        </message>
+        <message>
+            <source>One USB drive. All your boot images.
+Install Glassboot, then copy your ISO files onto the drive.</source>
+            <translation>One USB drive. All your boot images.
+Install Glassboot, then copy your ISO files onto the drive.</translation>
+        </message>
+        <message>
+            <source>Get started</source>
+            <translation>Get started</translation>
+        </message>
+        <message>
+            <source>Prepare your USB drive</source>
+            <translation>Prepare your USB drive</translation>
+        </message>
+        <message>
+            <source>Install once. Copy boot images whenever you need them.</source>
+            <translation>Install once. Copy boot images whenever you need them.</translation>
+        </message>
+        <message>
+            <source>USB drive</source>
+            <translation>USB drive</translation>
+        </message>
+        <message>
+            <source>Advanced options</source>
+            <translation>Advanced options</translation>
+        </message>
+        <message>
+            <source>Select a USB drive</source>
+            <translation>Select a USB drive</translation>
+        </message>
+        <message>
+            <source>Glassboot %1 installed · Update keeps your files.</source>
+            <translation>Glassboot %1 installed · Update keeps your files.</translation>
+        </message>
+        <message>
+            <source>Ready for a new install · This will erase the drive.</source>
+            <translation>Ready for a new install · This will erase the drive.</translation>
+        </message>
+        <message>
+            <source>Choose the drive you want to use. Check its name and capacity.</source>
+            <translation>Choose the drive you want to use. Check its name and capacity.</translation>
+        </message>
+    </context>
+    <context>
+        <name>glassboot::TitleBar</name>
+        <message>
+            <source>Minimize</source>
+            <translation>Minimize</translation>
+        </message>
+        <message>
+            <source>Maximize</source>
+            <translation>Maximize</translation>
+        </message>
+        <message>
+            <source>Restore</source>
+            <translation>Restore</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>Close</translation>
+        </message>
+    </context>
 </TS>

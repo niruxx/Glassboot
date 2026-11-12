@@ -350,6 +350,10 @@ Restart the installer with administrator rights?</source>
     </context>
     <context>
         <name>glassboot::MainWindow</name>
+    <message>
+        <source>Data filesystem:</source>
+        <translation>Sistema de archivos de datos:</translation>
+    </message>
         <message>
             <location filename="../gui/MainWindow.cpp" line="65" />
             <source>Glassboot Installer</source>
@@ -641,6 +645,71 @@ Restart the installer with administrator rights?</source>
             <location filename="../gui/MainWindow.cpp" line="498" />
             <source>Stop the installation? The drive will be left unusable.</source>
             <translation>¿Detener la instalación? La unidad quedará inutilizable.</translation>
+        </message>
+        <message>
+            <source>Welcome to Glassboot</source>
+            <translation>Te damos la bienvenida a Glassboot</translation>
+        </message>
+        <message>
+            <source>One USB drive. All your boot images.
+Install Glassboot, then copy your ISO files onto the drive.</source>
+            <translation>Una unidad USB. Todas tus imágenes de arranque.
+Instala Glassboot y copia tus archivos ISO en la unidad.</translation>
+        </message>
+        <message>
+            <source>Get started</source>
+            <translation>Comenzar</translation>
+        </message>
+        <message>
+            <source>Prepare your USB drive</source>
+            <translation>Prepara tu unidad USB</translation>
+        </message>
+        <message>
+            <source>Install once. Copy boot images whenever you need them.</source>
+            <translation>Instala una vez. Copia imágenes de arranque cuando las necesites.</translation>
+        </message>
+        <message>
+            <source>USB drive</source>
+            <translation>Unidad USB</translation>
+        </message>
+        <message>
+            <source>Advanced options</source>
+            <translation>Opciones avanzadas</translation>
+        </message>
+        <message>
+            <source>Select a USB drive</source>
+            <translation>Selecciona una unidad USB</translation>
+        </message>
+        <message>
+            <source>Glassboot %1 installed · Update keeps your files.</source>
+            <translation>Glassboot %1 instalado · Actualizar conserva tus archivos.</translation>
+        </message>
+        <message>
+            <source>Ready for a new install · This will erase the drive.</source>
+            <translation>Lista para instalar · Se borrará la unidad.</translation>
+        </message>
+        <message>
+            <source>Choose the drive you want to use. Check its name and capacity.</source>
+            <translation>Elige la unidad que quieres usar. Comprueba su nombre y capacidad.</translation>
+        </message>
+    </context>
+    <context>
+        <name>glassboot::TitleBar</name>
+        <message>
+            <source>Minimize</source>
+            <translation>Minimizar</translation>
+        </message>
+        <message>
+            <source>Maximize</source>
+            <translation>Maximizar</translation>
+        </message>
+        <message>
+            <source>Restore</source>
+            <translation>Restaurar</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>Cerrar</translation>
         </message>
     </context>
 </TS>

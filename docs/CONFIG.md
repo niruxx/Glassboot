@@ -138,6 +138,11 @@ See [disk image validation](DISK-IMAGE-VALIDATION.md) for coverage and commands.
 
 ## Folders Glassboot reads
 
+Linux unattended answer files can be selected per ISO with `kickstart`, `preseed`,
+`autoyast` and `autoinstall`. The latter selects a NoCloud CIDATA disk image.
+See [storage and unattended installs](STORAGE-AND-UNATTENDED.md) for examples,
+filesystem options, preserve-data installs and 4Kn coverage.
+
 | Folder / file | Effect |
 |---|---|
 | `glassboot\glassboot.cfg` | this configuration |
@@ -155,7 +160,18 @@ See [disk image validation](DISK-IMAGE-VALIDATION.md) for coverage and commands.
   disk (BIOS).
 * **Tools > Verify a file's checksum** (**F5**): SHA-256, SHA-512, SHA-1 or MD5 of any
   image on the drive, to compare with the checksum its publisher lists.
-* **More boot modes** (**F6**): other ways to start an ISO that doesn't boot normally.
+* **Compatibility / alternate boot options** (**F6**), directly below the image list:
+  select another boot method, then select the same ISO from the discovered files.
+  On UEFI, the first option starts the ISO's own EFI loader as a virtual CD,
+  including Windows ISOs. Other options retain GRUB/Syslinux menus with the hook,
+  loopback.cfg, and known-distribution compatibility boot. BIOS offers memdisk.
+
+Automatic boot on UEFI prefers EFI-specific GRUB menus, then generic GRUB menus,
+then loopback.cfg, then the native EFI loader instead of a BIOS-oriented Syslinux
+menu. Windows retains its UEFI wimboot setup options and FreeBSD its RAM-root path.
+The USB's MBR/GPT partition layout does not select the firmware boot mode. To use
+EFI loaders, start the USB's UEFI entry in the computer's firmware boot menu;
+a running BIOS GRUB cannot switch the computer to UEFI.
 
 ## Search
 

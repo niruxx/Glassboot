@@ -16,6 +16,7 @@ struct Payload {
     std::vector<uint8_t> mbr;  // GRUB boot.img
     std::vector<uint8_t> core; // GRUB core.img
     std::string espImagePath;  // streamed from disk, not held in memory
+    std::string esp4kImagePath; // optional verified 4096-byte-sector FAT16 ESP
     uint64_t espImageSize = 0;
 
     // Load and verify every file against manifest.txt. Throws Error.

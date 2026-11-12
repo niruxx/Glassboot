@@ -1,6 +1,7 @@
 #include "ConfigDialog.h"
 #include "Elevation.h"
 #include "MainWindow.h"
+#include "Theme.h"
 #include "Payload.h"
 
 #include <QApplication>
@@ -11,7 +12,9 @@
 #include <QTranslator>
 
 int main(int argc, char** argv) {
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
+    glassboot::applyTheme(app);
     QApplication::setApplicationName("Glassboot Installer");
     QApplication::setApplicationVersion(GLASSBOOT_INSTALLER_VERSION);
 
@@ -61,7 +64,8 @@ int main(int argc, char** argv) {
                                                    "Restart the installer with administrator rights?"));
         if (r == QMessageBox::Yes) {
             QStringList args{"--no-elevate"};
-            if (!payloadDir.isEmpty()) args << "--payload" << payloadDir;
+            if (!payloadDir.isEmpty() && (qEnvironmentVariableIsEmpty("APPIMAGE") || parser.isSet(payloadOpt)))
+                args << "--payload" << payloadDir;
             if (glassboot::relaunchElevated(args)) return 0;
             QMessageBox::warning(nullptr, QObject::tr("Could not restart"),
                                  QObject::tr("Could not obtain administrator rights. Drives will be listed "

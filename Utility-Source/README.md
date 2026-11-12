@@ -5,7 +5,7 @@ drive into a Glassboot stick.
 
 The app is a single window:
 * **A list of compatible drives.** A drive appears only if it is USB or removable, at
-  least 321 MiB, uses 512-byte sectors, and doesn't hold the running OS. Below the list,
+  least 321 MiB, uses 512-byte or 4096-byte sectors, and doesn't hold the running OS. Below the list,
   a note says how many other drives were hidden; hover over it to see why. The list
   refreshes on its own when drives are plugged in or removed, and a lone compatible
   drive is preselected.
@@ -161,7 +161,8 @@ glassboot-cli update --device /dev/sdX                # refresh boot files, keep
   it holds the Windows directory or a volume that spans several disks.
 * The GUI only lists compatible (USB or removable) drives and always asks for confirmation
   before formatting. The CLI also accepts an internal disk, but only when you name it with `--device`.
-* Only disks with 512-byte logical sectors are supported for now. 4Kn USB disks are rare.
+* 512-byte sectors support MBR/BIOS and GPT/UEFI. 4Kn requires GPT/UEFI and the
+  separately verified `esp4k.img` payload. Firmware compatibility still varies.
 
 ## Testing status
 
@@ -189,14 +190,19 @@ glassboot-cli update --device /dev/sdX                # refresh boot files, keep
   can't create one there yet.
 * **Additional translations:** Spanish is included; more languages can be added in `translations/`.
 * **Fuller exFAT up-case table:** currently covers Latin, Greek and Cyrillic.
-* **4Kn disk support:** the installer still requires 512-byte logical sectors.
+* **4Kn hardware validation:** image/filesystem and NVMe UEFI menu tests pass;
+  physical USB hardware and Windows raw writes remain untested.
 
 ## GPT and reserved space
+
+Linux filesystem choices, unattended profiles, preserve-data/NTFS shrink-and-add
+and 4Kn setup are documented in [Storage and unattended installs](../docs/STORAGE-AND-UNATTENDED.md).
 
 The GUI offers **Partition table** and **Reserve at end of disk** for fresh installs.
 MBR remains the default and supports BIOS plus UEFI. GPT is **UEFI only**, supports
 full capacity above 2 TiB, and uses primary and backup GPT tables with CRC checks.
-Both layouts currently require 512-byte logical sectors. Secure Boot is not supported.
+MBR requires 512-byte logical sectors; GPT also supports 4096-byte logical sectors.
+Secure Boot is not supported.
 
 ```sh
 glassboot-cli install --image /tmp/glassboot-gpt.img --size 4G --gpt --reserve 512M

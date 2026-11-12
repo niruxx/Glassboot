@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Build all Glassboot boot components from pinned upstream source.
 #
-#   out/grub/      GRUB tools + modules for i386-pc (BIOS), x86_64-efi and i386-efi
+#   out/grub/      GRUB tools + modules for i386-pc (BIOS), x86_64-efi, i386-efi and arm64-efi
 #   out/wimboot/   wimboot (BIOS + x86_64 UEFI) and wimboot.i386.efi
 #
 # Usage: scripts/build.sh [grub|wimboot|all]
 set -euo pipefail
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1704067200}" TZ=UTC LC_ALL=C
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=../versions.env
@@ -51,16 +52,20 @@ EOF
   (cd "$src" && ./autogen.sh >/dev/null)
 
   rm -rf "$OUT/grub"
-  # target:platform pairs. All three install into the same prefix; grub-install then
+  # target:platform pairs. All targets install into the same prefix; grub-install then
   # finds each platform's modules under lib/grub/<target>-<platform>/.
   local spec target platform
-  for spec in i386:pc x86_64:efi i386:efi; do
+  for spec in i386:pc x86_64:efi i386:efi arm64:efi; do
     target="${spec%%:*}" platform="${spec##*:}"
     log "Building GRUB for $target-$platform"
     mkdir -p "$src/build-$target-$platform"
     (
       cd "$src/build-$target-$platform"
-      ../configure --quiet \
+      local cross=()
+      if [[ "$target" == arm64 ]]; then
+        cross=(TARGET_CC=aarch64-linux-gnu-gcc TARGET_OBJCOPY=aarch64-linux-gnu-objcopy TARGET_STRIP=aarch64-linux-gnu-strip TARGET_NM=aarch64-linux-gnu-nm TARGET_RANLIB=aarch64-linux-gnu-ranlib)
+      fi
+      env "${cross[@]}" ../configure --quiet \
         --prefix="$OUT/grub" \
         --target="$target" --with-platform="$platform" \
         --disable-werror --disable-nls
@@ -92,7 +97,7 @@ build_wimboot() {
   cp "$src/COPYING"* "$OUT/wimboot/" 2>/dev/null || true
 }
 
-# The initrd hook (hook/glassboot-hook.c): a static x86_64 binary packed as a newc cpio
+# The initrd hook (hook/glassboot-hook.c): static x86_64 / ARM64 binaries in newc cpio
 # that GRUB appends to a distribution's initrd. Fixed mtimes keep the cpio reproducible.
 build_hook() {
   log "Building initrd hook"
@@ -103,6 +108,10 @@ build_hook() {
   find "$stage" -exec touch -h -d @0 {} +
   (cd "$stage" && find glassboot | LC_ALL=C sort | cpio --quiet -o -H newc --reproducible --owner=0:0) \
     > "$OUT/hook/glassboot-hook-x86_64.cpio"
+  aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Wno-format-truncation -static -s -o "$stage/glassboot/init" "$ROOT/hook/glassboot-hook.c"
+  find "$stage" -exec touch -h -d @0 {} +
+  (cd "$stage" && find glassboot | LC_ALL=C sort | cpio --quiet -o -H newc --reproducible --owner=0:0) \
+    > "$OUT/hook/glassboot-hook-arm64.cpio"
   ls -l "$OUT/hook/"
 }
 
@@ -112,9 +121,9 @@ build_winhelper() {
   log "Building Windows PE helper"
   rm -rf "$OUT/winhelper"
   mkdir -p "$OUT/winhelper"
-  x86_64-w64-mingw32-gcc -municode -O2 -Wall -s -o "$OUT/winhelper/glassboot-attach.exe" \
+  x86_64-w64-mingw32-gcc -municode -O2 -Wall -s -Wl,--no-insert-timestamp -o "$OUT/winhelper/glassboot-attach.exe" \
     "$ROOT/win-helper/glassboot-attach.c" -lvirtdisk
-  i686-w64-mingw32-gcc -municode -O2 -Wall -s -o "$OUT/winhelper/glassboot-attach32.exe" \
+  i686-w64-mingw32-gcc -municode -O2 -Wall -s -Wl,--no-insert-timestamp -o "$OUT/winhelper/glassboot-attach32.exe" \
     "$ROOT/win-helper/glassboot-attach.c" -lvirtdisk
   ls -l "$OUT/winhelper/"
 }

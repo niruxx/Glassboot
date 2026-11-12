@@ -29,6 +29,7 @@
 
 #include <grub/command.h>
 #include <grub/acpi.h>
+#include <grub/crypto.h>
 #include <grub/device.h>
 #include <grub/disk.h>
 #include <grub/partition.h>
@@ -113,7 +114,8 @@ sbuf_add_quoted (struct sbuf *b, const char *s)
  *   persist /path/file.iso = /path/persistence.dat
  *   dud     /path/file.iso = /path/driver-disk.iso   (may repeat; Linux driver update disks)
  */
-enum { CFG_ALIAS, CFG_HIDE, CFG_ARGS, CFG_PERSIST, CFG_DUD, CFG_CLASS };
+enum { CFG_ALIAS, CFG_HIDE, CFG_ARGS, CFG_PERSIST, CFG_DUD, CFG_CLASS,
+       CFG_KICKSTART, CFG_PRESEED, CFG_AUTOINSTALL, CFG_AUTOYAST };
 
 struct cfg_item
 {
@@ -275,6 +277,14 @@ grub_cmd_gb_config (grub_command_t cmd __attribute__ ((unused)), int argc, char 
 	type = CFG_CLASS;
       else if (grub_strcasecmp (key, "dud") == 0)
 	type = CFG_DUD;
+      else if (grub_strcasecmp (key, "kickstart") == 0)
+        type = CFG_KICKSTART;
+      else if (grub_strcasecmp (key, "preseed") == 0)
+        type = CFG_PRESEED;
+      else if (grub_strcasecmp (key, "autoinstall") == 0)
+        type = CFG_AUTOINSTALL;
+      else if (grub_strcasecmp (key, "autoyast") == 0)
+        type = CFG_AUTOYAST;
 
       if (type < 0)
 	{
@@ -320,7 +330,7 @@ grub_cmd_gb_config (grub_command_t cmd __attribute__ ((unused)), int argc, char 
       *eq = 0;
       cfg_items[cfg_nitems].type = type;
       cfg_items[cfg_nitems].path = norm_path (trim (rest));
-      cfg_items[cfg_nitems].value = (type == CFG_PERSIST || type == CFG_DUD) ? norm_path (trim (eq + 1))
+      cfg_items[cfg_nitems].value = (type == CFG_PERSIST || type == CFG_DUD || type >= CFG_KICKSTART) ? norm_path (trim (eq + 1))
 				    : grub_strdup (trim (eq + 1));
       cfg_nitems++;
     }
@@ -892,9 +902,101 @@ static int hook_enabled;
 static char *hook_args[HOOK_MAX_ARGS];
 static int hook_nargs;
 /* Extra initrd files: the hook cpio, then user injection archives. */
-#define HOOK_MAX_INITRDS 12
+#define HOOK_MAX_INITRDS 20
 static char *hook_initrds[HOOK_MAX_INITRDS];
 static int hook_ninitrds;
+
+/* Physical maps from GRUB's filesystem drivers avoid requiring NTFS/XFS/UDF
+   modules in every distribution's initrd. The file must be fully allocated,
+   uncompressed and sector-aligned; gaps in callback coverage are rejected. */
+static char *hook_maps[3];
+struct hook_extent { grub_uint64_t off, len; };
+struct hook_map_ctx {
+  struct hook_extent *v;
+  grub_size_t n, cap;
+  grub_uint64_t base, total;
+};
+static grub_err_t
+hook_map_read (grub_disk_addr_t sector, unsigned offset, unsigned length,
+               char *buf __attribute__ ((unused)), void *data)
+{
+  struct hook_map_ctx *c = data;
+  grub_uint64_t at;
+  if (sector < c->base || offset || !length)
+    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "unaligned file extents");
+  at = (sector - c->base) << 9;
+  if (c->n && c->v[c->n-1].off + c->v[c->n-1].len == at)
+    c->v[c->n-1].len += length;
+  else
+    {
+      if (c->n >= 65536) return grub_error (GRUB_ERR_BAD_FILE_TYPE, "too many file extents");
+      if (c->n == c->cap)
+        {
+          void *p;
+          c->cap = c->cap ? c->cap * 2 : 16;
+          p = grub_realloc (c->v, c->cap * sizeof (*c->v));
+          if (!p) return grub_errno;
+          c->v = p;
+        }
+      c->v[c->n].off = at; c->v[c->n++].len = length;
+    }
+  c->total += length;
+  return GRUB_ERR_NONE;
+}
+static grub_err_t
+hook_make_map (const char *device, const char *path, int index)
+{
+  char *full = grub_xasprintf ("%s%s", device, path), *buf = NULL;
+  grub_file_t file;
+  struct hook_map_ctx c = {0};
+  struct sbuf text = {0};
+  grub_size_t i;
+  char line[96];
+  grub_err_t err = GRUB_ERR_NONE;
+  if (!full) return grub_errno;
+  file = grub_file_open (full, GRUB_FILE_TYPE_PRINT_BLOCKLIST | GRUB_FILE_TYPE_NO_DECOMPRESS);
+  grub_free (full);
+  if (!file) return grub_errno;
+  if (!file->device->disk) { err = grub_error (GRUB_ERR_BAD_DEVICE, "disk file required"); goto done; }
+  if (!grub_strcmp (file->fs->name, "exfat")) goto done;
+  /* Never bypass a COW filesystem for writable persistence. The hook uses a
+     filesystem-backed loop in that case, so reflinks and sparse files stay safe. */
+  if (index == 1) goto done;
+  grub_printf ("Mapping %s for the Linux hook...\n", path);
+  buf = grub_malloc (1024 * 1024);
+  if (!buf) { err = grub_errno; goto done; }
+  c.base = grub_partition_get_start (file->device->disk->partition);
+  file->read_hook = hook_map_read; file->read_hook_data = &c;
+  while (grub_file_read (file, buf, 1024 * 1024) > 0) ;
+  if (grub_errno) { err = grub_errno; goto done; }
+  if (!c.n || c.total != grub_file_size (file))
+    { err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "sparse/compressed files cannot be mapped; copy %s without compression", path); goto done; }
+  grub_snprintf (line, sizeof (line), "GBMAP1 %llu %llu\n", (unsigned long long)c.total, (unsigned long long)c.n);
+  if (!sbuf_add (&text, line)) { err = grub_errno; goto done; }
+  for (i = 0; i < c.n; i++)
+    {
+      if ((c.v[i].len & 511) && i + 1 != c.n)
+        { err = grub_error (GRUB_ERR_BAD_FILE_TYPE, "non-sector-aligned file extent"); goto done; }
+      grub_snprintf (line, sizeof (line), "%llu %llu\n", (unsigned long long)c.v[i].off, (unsigned long long)c.v[i].len);
+      if (!sbuf_add (&text, line)) { err = grub_errno; goto done; }
+    }
+  hook_maps[index] = text.data; text.data = NULL;
+done:
+  grub_free (text.data); grub_free (c.v); grub_free (buf); grub_file_close (file);
+  return err;
+}
+static char *hook_map_get (int i, grub_size_t *size) {
+  const char *s = hook_maps[i] ? hook_maps[i] : "";
+  *size = grub_strlen (s); return grub_strdup (s);
+}
+static char *hook_map_iso (grub_size_t *n) { return hook_map_get (0,n); }
+static char *hook_map_persist (grub_size_t *n) { return hook_map_get (1,n); }
+static char *hook_map_seed (grub_size_t *n) { return hook_map_get (2,n); }
+static struct grub_procfs_entry hook_map_entries[3] = {
+  { .name="glassboot_iso_map", .get_contents=hook_map_iso },
+  { .name="glassboot_persist_map", .get_contents=hook_map_persist },
+  { .name="glassboot_seed_map", .get_contents=hook_map_seed }
+};
 
 static void
 free_hook_args (void)
@@ -906,6 +1008,7 @@ free_hook_args (void)
   for (i = 0; i < hook_ninitrds; i++)
     grub_free (hook_initrds[i]);
   hook_ninitrds = 0;
+  for (i = 0; i < 3; i++) { grub_free (hook_maps[i]); hook_maps[i] = NULL; }
 }
 
 struct wrapped
@@ -1057,6 +1160,8 @@ grub_cmd_gb_hook_enable (grub_command_t cmd __attribute__ ((unused)), int argc, 
   struct name_list inj;
   int i;
 
+  hook_enabled = 0;
+
   if (argc != 3 && argc != 4)
     return grub_error (GRUB_ERR_BAD_ARGUMENT,
 		       N_("usage: gb_hook_enable ISO_PATH PART_UUID HOOK_INITRD [DATA_DEVICE]"));
@@ -1077,6 +1182,56 @@ grub_cmd_gb_hook_enable (grub_command_t cmd __attribute__ ((unused)), int argc, 
      scan for their media, but accept an explicit one. The hook creates /dev/glassboot.
      Other distributions ignore this argument. */
   hook_args[hook_nargs++] = grub_strdup ("live-media=/dev/glassboot");
+
+  /* NoCloud uses a CIDATA seed disk, available after the live system switches
+     root. The other installers read their answer file directly from the initrd. */
+  {
+    const char *seed = cfg_lookup (CFG_AUTOINSTALL, argv[0]);
+    if (seed)
+      {
+        struct sbuf p = { 0 };
+        if (sbuf_add (&p, "glassboot.seed=") && add_encoded (&p, seed))
+          {
+            hook_args[hook_nargs++] = p.data;
+            hook_args[hook_nargs++] = grub_strdup ("autoinstall");
+            hook_args[hook_nargs++] = grub_strdup ("ds=nocloud");
+          }
+        else
+          grub_free (p.data);
+      }
+    if (argc >= 4)
+      {
+        static const struct { int type; const char *name; const char *arg; } answers[] = {
+          { CFG_KICKSTART, "glassboot/ks.cfg", "inst.ks=file:/glassboot/ks.cfg" },
+          { CFG_PRESEED, "preseed.cfg", "auto=true priority=critical preseed/file=/preseed.cfg" },
+          { CFG_AUTOYAST, "autoinst.xml", "autoyast=file:///autoinst.xml" }
+        };
+        grub_size_t a;
+        for (a = 0; a < sizeof (answers) / sizeof (answers[0]); a++)
+          {
+            const char *answer = cfg_lookup (answers[a].type, argv[0]);
+            char *path;
+            if (!answer) continue;
+            path = grub_xasprintf ("%s%s", argv[3], answer);
+            if (!path || !file_exists (path))
+              {
+                grub_free (path);
+                free_hook_args ();
+                return grub_error (GRUB_ERR_FILE_NOT_FOUND, "unattended answer file missing: %s", answer);
+              }
+            hook_initrds[hook_ninitrds++] = grub_xasprintf ("newc:%s:%s", answers[a].name, path);
+            grub_free (path);
+            if (answers[a].type == CFG_PRESEED)
+              {
+                hook_args[hook_nargs++] = grub_strdup ("auto=true");
+                hook_args[hook_nargs++] = grub_strdup ("priority=critical");
+                hook_args[hook_nargs++] = grub_strdup ("preseed/file=/preseed.cfg");
+              }
+            else
+              hook_args[hook_nargs++] = grub_strdup (answers[a].arg);
+          }
+      }
+  }
 
   /* glassboot.cfg: persistence file for this ISO (mapped read-write by the hook). */
   {
@@ -1112,6 +1267,19 @@ grub_cmd_gb_hook_enable (grub_command_t cmd __attribute__ ((unused)), int argc, 
        DATA_DEVICE/glassboot/inject/linux/<any file>   added to every Linux boot
        DATA_DEVICE<iso path>.cpio                       added to this ISO only */
   hook_initrds[hook_ninitrds++] = grub_strdup (argv[2]);
+  if (argc >= 4)
+    {
+      const char *paths[3] = { argv[0], cfg_lookup (CFG_PERSIST, argv[0]), cfg_lookup (CFG_AUTOINSTALL, argv[0]) };
+      static const char *names[3] = { "iso", "persist", "seed" };
+      for (i = 0; i < 3; i++)
+        if (paths[i])
+          {
+            grub_err_t err = hook_make_map (argv[3], paths[i], i);
+            if (err) { free_hook_args (); return err; }
+            if (hook_maps[i])
+              hook_initrds[hook_ninitrds++] = grub_xasprintf ("newc:glassboot/%s.map:(proc)/glassboot_%s_map", names[i], names[i]);
+          }
+    }
   if (argc == 4)
     {
       char *dir = grub_xasprintf ("%s/glassboot/inject/linux", argv[3]);
@@ -1176,6 +1344,19 @@ grub_cmd_gb_hook_disable (grub_command_t cmd __attribute__ ((unused)),
 			  int argc __attribute__ ((unused)), char **argv __attribute__ ((unused)))
 {
   hook_enabled = 0;
+  return GRUB_ERR_NONE;
+}
+
+static grub_err_t
+grub_cmd_gb_hook_add_initrd (grub_command_t cmd __attribute__ ((unused)), int argc, char **argv)
+{
+  if (argc != 1 || !hook_enabled)
+    return grub_error (GRUB_ERR_BAD_ARGUMENT, "gb_hook_add_initrd requires an active hook and one initrd path");
+  if (hook_ninitrds >= HOOK_MAX_INITRDS)
+    return grub_error (GRUB_ERR_OUT_OF_RANGE, "too many injected initrd files");
+  hook_initrds[hook_ninitrds] = grub_strdup (argv[0]);
+  if (!hook_initrds[hook_ninitrds]) return grub_errno;
+  hook_ninitrds++;
   return GRUB_ERR_NONE;
 }
 
@@ -2478,7 +2659,9 @@ grub_cmd_gb_efi_vdisk_boot (grub_command_t cmd __attribute__ ((unused)), int arg
   grub_efi_status_t st;
   grub_uint32_t block;
   int tried = 0;
-#if defined (__x86_64__)
+#if defined (__aarch64__)
+  const char *loader = "\\EFI\\BOOT\\BOOTAA64.EFI";
+#elif defined (__x86_64__)
   const char *loader = "\\EFI\\BOOT\\BOOTX64.EFI";
 #else
   const char *loader = "\\EFI\\BOOT\\BOOTIA32.EFI";
@@ -2596,7 +2779,9 @@ struct os_ctx
 #ifdef GRUB_MACHINE_EFI
 /* Loader file names per vendor folder, in order of preference. */
 static const char *const efi_loaders[] = {
-#if defined (__x86_64__)
+#if defined (__aarch64__)
+  "shimaa64.efi", "grubaa64.efi", "systemd-bootaa64.efi",
+#elif defined (__x86_64__)
   "shimx64.efi", "grubx64.efi", "systemd-bootx64.efi",
 #else
   "shimia32.efi", "grubia32.efi", "systemd-bootia32.efi",
@@ -2804,7 +2989,9 @@ efi_scan_os (struct os_ctx *c)
       /* Nothing recognised: the firmware's fallback loader, if any. */
       if (!found)
 	{
-#if defined (__x86_64__)
+#if defined (__aarch64__)
+	  const char *fb = "\\EFI\\BOOT\\BOOTAA64.EFI";
+#elif defined (__x86_64__)
 	  const char *fb = "\\EFI\\BOOT\\BOOTX64.EFI";
 #else
 	  const char *fb = "\\EFI\\BOOT\\BOOTIA32.EFI";
@@ -2913,6 +3100,71 @@ grub_cmd_gb_scan_os (grub_command_t cmd __attribute__ ((unused)), int argc, char
 
 /* ------------------------------------------------------------------ module */
 
+/* Corruption detection, not a substitute for a signed/Secure Boot trust chain:
+   this command and its manifest are on the same writable ESP. */
+static grub_err_t
+grub_cmd_gb_verify_esp (grub_command_t cmd __attribute__ ((unused)), int argc, char **argv)
+{
+  grub_file_t manifest;
+  char *text, *line, *next;
+  grub_size_t size;
+  unsigned count = 0;
+  const gcry_md_spec_t *md;
+  static const char hex[] = "0123456789abcdef";
+  if (argc != 2) return grub_error (GRUB_ERR_BAD_ARGUMENT, "usage: gb_verify_esp MANIFEST ESP_DEVICE");
+  grub_dl_load ("gcry_sha256");
+  grub_errno = GRUB_ERR_NONE;
+  md = grub_crypto_lookup_md_by_name ("sha256");
+  if (!md) return grub_error (GRUB_ERR_BAD_ARGUMENT, "SHA-256 unavailable");
+  manifest = grub_file_open (argv[0], GRUB_FILE_TYPE_CONFIG | GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (!manifest) return grub_errno;
+  size = grub_file_size (manifest);
+  if (!size || size > 512 * 1024) { grub_file_close (manifest); return grub_error (GRUB_ERR_BAD_FILE_TYPE, "invalid boot manifest size"); }
+  text = grub_zalloc (size + 1);
+  if (!text || grub_file_read (manifest, text, size) != (grub_ssize_t) size)
+    { grub_file_close (manifest); grub_free (text); return grub_error (GRUB_ERR_FILE_READ_ERROR, "cannot read boot manifest"); }
+  grub_file_close (manifest);
+  for (line = text; line; line = next)
+    {
+      char *path, *full, actual[65];
+      grub_file_t file;
+      grub_uint8_t *bytes, hash[32];
+      grub_size_t len, i;
+      next = grub_strchr (line, '\n'); if (next) *next++ = 0;
+      if (!*line || *line == '#') continue;
+      if (grub_strlen (line) < 67 || line[64] != ' ' || line[65] != ' ')
+        { grub_free (text); return grub_error (GRUB_ERR_BAD_FILE_TYPE, "malformed boot manifest"); }
+      path = line + 66;
+      if (*path == '/' || grub_strstr (path, "..") || grub_strchr (path, '\\') || grub_strchr (path, '\r'))
+        { grub_free (text); return grub_error (GRUB_ERR_BAD_FILE_TYPE, "unsafe boot manifest path"); }
+      full = grub_xasprintf ("%s/%s", argv[1], path);
+      if (!full) { grub_free (text); return grub_errno; }
+      file = grub_file_open (full, GRUB_FILE_TYPE_CONFIG | GRUB_FILE_TYPE_NO_DECOMPRESS);
+      grub_free (full);
+      if (!file) { grub_free (text); return grub_errno; }
+      len = grub_file_size (file);
+      if (len > 32 * 1024 * 1024)
+        { grub_file_close (file); grub_free (text); return grub_error (GRUB_ERR_BAD_FILE_TYPE, "boot file too large"); }
+      bytes = grub_malloc (len ? len : 1);
+      if (!bytes || grub_file_read (file, bytes, len) != (grub_ssize_t) len)
+        { grub_file_close (file); grub_free (bytes); grub_free (text); return grub_error (GRUB_ERR_FILE_READ_ERROR, "cannot read boot file"); }
+      grub_file_close (file);
+      grub_crypto_hash (md, hash, bytes, len); grub_free (bytes);
+      for (i = 0; i < 32; i++) { actual[2*i] = hex[hash[i] >> 4]; actual[2*i+1] = hex[hash[i] & 15]; }
+      actual[64] = 0;
+      if (grub_strncasecmp (actual, line, 64))
+        {
+          grub_error (GRUB_ERR_BAD_FILE_TYPE, "boot file checksum mismatch: %s", path);
+          grub_free (text); return grub_errno;
+        }
+      count++;
+    }
+  grub_free (text);
+  if (!count) return grub_error (GRUB_ERR_BAD_FILE_TYPE, "empty boot manifest");
+  grub_printf ("Glassboot: verified %u boot files.\n", count);
+  return GRUB_ERR_NONE;
+}
+
 /* GRUB's BSD loader predates FreeBSD's move from hint.acpi.0.rsdp to
    acpi.rsdp. EFI has no legacy BIOS scan area: pass the firmware pointer. */
 static grub_err_t
@@ -2934,13 +3186,17 @@ grub_cmd_gb_freebsd_env (grub_command_t cmd __attribute__ ((unused)),
   return GRUB_ERR_NONE;
 }
 
-static grub_command_t cmd_scan, cmd_enable, cmd_disable, cmd_config, cmd_scan_os, cmd_vdisk, cmd_vhd_bcd, cmd_freebsd_env;
+static grub_command_t cmd_scan, cmd_enable, cmd_disable, cmd_config, cmd_scan_os, cmd_vdisk, cmd_vhd_bcd, cmd_freebsd_env, cmd_hook_add_initrd, cmd_verify_esp;
 #ifdef GRUB_MACHINE_EFI
 static grub_command_t cmd_wimboot_efi, cmd_vdisk_boot, cmd_efi_boot_os;
 #endif
 
 GRUB_MOD_INIT (glassboot)
 {
+  int map;
+  cmd_verify_esp = grub_register_command ("gb_verify_esp", grub_cmd_gb_verify_esp, N_("MANIFEST ESP_DEVICE"),
+                                        N_("Verify the boot-file SHA-256 manifest."));
+  for (map = 0; map < 3; map++) grub_procfs_register (hook_map_entries[map].name, &hook_map_entries[map]);
   cmd_freebsd_env = grub_register_command ("gb_freebsd_env", grub_cmd_gb_freebsd_env, 0,
                                           N_("Pass firmware ACPI information to FreeBSD."));
   cmd_scan = grub_register_command ("gb_scan", grub_cmd_gb_scan, N_("(DEVICE)"),
@@ -2950,6 +3206,8 @@ GRUB_MOD_INIT (glassboot)
 				      N_("Add the Glassboot hook to Linux boots."));
   cmd_disable = grub_register_command ("gb_hook_disable", grub_cmd_gb_hook_disable, 0,
 				       N_("Stop adding the Glassboot hook."));
+  cmd_hook_add_initrd = grub_register_command ("gb_hook_add_initrd", grub_cmd_gb_hook_add_initrd, N_("INITRD"),
+                                              N_("Append an initrd file to the active Linux hook."));
   grub_procfs_register ("glassboot_menu", &menu_entry);
 #ifdef GRUB_MACHINE_EFI
   cmd_wimboot_efi = grub_register_command ("gb_wimboot_efi", grub_cmd_gb_wimboot_efi,
@@ -2979,6 +3237,9 @@ GRUB_MOD_INIT (glassboot)
 
 GRUB_MOD_FINI (glassboot)
 {
+  int map;
+  grub_unregister_command (cmd_verify_esp);
+  for (map = 0; map < 3; map++) grub_procfs_unregister (&hook_map_entries[map]);
   grub_unregister_command (cmd_freebsd_env);
   uninstall_wrappers ();
   grub_procfs_unregister (&menu_entry);
@@ -2996,6 +3257,7 @@ GRUB_MOD_FINI (glassboot)
   grub_unregister_command (cmd_scan);
   grub_unregister_command (cmd_enable);
   grub_unregister_command (cmd_disable);
+  grub_unregister_command (cmd_hook_add_initrd);
 #ifdef GRUB_MACHINE_EFI
   grub_unregister_command (cmd_wimboot_efi);
   grub_unregister_command (cmd_vdisk_boot);

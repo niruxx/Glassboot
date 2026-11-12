@@ -10,23 +10,24 @@
 #include <string>
 #include <vector>
 
+class QPropertyAnimation;
+class QVariantAnimation;
 class QLabel;
 class QComboBox;
-class QSpinBox;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QThread;
 class QTimer;
 class QToolButton;
-class QTreeWidget;
+
 
 namespace glassboot {
 
 class InstallWorker;
+class GlassPanel;
 
-// One screen: a list of drives Glassboot can be installed on, and an Install button
-// that formats the selected drive.
+// Welcome and USB preparation screens.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -37,6 +38,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    void showEvent(QShowEvent* event) override;
 
 private slots:
     void refreshDrives();
@@ -44,7 +46,6 @@ private slots:
     void startInstall();
     void startUpdate();
     void cancelInstall();
-    void openSettings();
     void onProgress(int permille, const QString& step);
     void onLog(const QString& line);
     void onFinished(bool ok, const QString& message);
@@ -67,11 +68,16 @@ private:
     bool elevated_ = false;
     bool busy_ = false;
 
-    QTreeWidget* list_ = nullptr;
-    QComboBox* partitionStyle_ = nullptr;
-    QSpinBox* reserve_ = nullptr;
-    QLabel* hiddenNote_ = nullptr;
+    QComboBox* list_ = nullptr;
+    QLabel* driveInfo_ = nullptr;
     QLabel* notice_ = nullptr;
+    bool positioned_ = false;
+    GlassPanel* deviceCard_ = nullptr;
+    GlassPanel* statusPanel_ = nullptr;
+    QString lastStep_;
+    QLabel* statusDot_ = nullptr;
+    QPropertyAnimation* progressAnimation_ = nullptr;
+    QVariantAnimation* pulse_ = nullptr;
     QLabel* status_ = nullptr;
     QProgressBar* progress_ = nullptr;
     QToolButton* detailsToggle_ = nullptr;
@@ -80,7 +86,6 @@ private:
     QPushButton* cancelButton_ = nullptr;
     QPushButton* installButton_ = nullptr;
     QPushButton* updateButton_ = nullptr;
-    QPushButton* configButton_ = nullptr;
     QTimer* hotplug_ = nullptr;
 
     QThread* thread_ = nullptr;

@@ -104,6 +104,7 @@ public:
     }
     ~LinuxDisk() override { if (fd_ >= 0) ::close(fd_); }
     uint64_t sizeBytes() const override { return size_; }
+    std::string backingPath() const override { return path_; }
 
     void write(uint64_t off, const void* data, size_t len) override {
         check(off, len);
@@ -200,7 +201,7 @@ std::vector<DiskInfo> listDisks() {
 
 std::unique_ptr<BlockDevice> openDisk(const DiskInfo& disk) {
     if (disk.system) throw Error(disk.id + " holds the running system; refusing");
-    if (disk.sectorSize != 512) throw Error("only disks with 512-byte logical sectors are supported");
+    if (disk.sectorSize != 512 && disk.sectorSize != 4096) throw Error("unsupported logical sector size");
 
     // Unmount everything on the disk (deepest mount points first).
     const std::string name = disk.id.substr(disk.id.rfind('/') + 1);
@@ -215,11 +216,11 @@ std::unique_ptr<BlockDevice> openDisk(const DiskInfo& disk) {
             throw Error("cannot unmount " + t + ": " + std::strerror(errno) +
                         ". Close any programs using the USB drive and try again.");
     }
-    return std::make_unique<LinuxDisk>(disk.id, disk.sizeBytes);
+    return sectorView(std::make_unique<LinuxDisk>(disk.id, disk.sizeBytes), disk.sectorSize);
 }
 
 std::unique_ptr<BlockDevice> openDiskReadOnly(const DiskInfo& disk) {
-    return std::make_unique<LinuxDisk>(disk.id, disk.sizeBytes, false);
+    return sectorView(std::make_unique<LinuxDisk>(disk.id, disk.sizeBytes, false), disk.sectorSize);
 }
 
 } // namespace glassboot

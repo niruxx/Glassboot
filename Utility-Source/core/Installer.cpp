@@ -1,6 +1,7 @@
 #include "Installer.h"
 
 #include "ExFat.h"
+#include "DataFilesystem.h"
 #include "Mbr.h"
 #include "Gpt.h"
 #include "Sha256.h"
@@ -74,7 +75,7 @@ private:
 
 // Write esp.img at `espStart`, personalising hidden-sectors and the volume serial.
 void writeEsp(BlockDevice& dev, const Payload& payload, uint64_t espStart, uint32_t serial, Steps& s) {
-    std::ifstream f(payload.espImagePath, std::ios::binary);
+    std::ifstream f(dev.logicalSectorSize() == 4096 ? payload.esp4kImagePath : payload.espImagePath, std::ios::binary);
     if (!f) throw Error("cannot open " + payload.espImagePath);
     const size_t chunk = 4 * kMiB;
     AlignedBuffer buf(chunk);
@@ -86,7 +87,9 @@ void writeEsp(BlockDevice& dev, const Payload& payload, uint64_t espStart, uint3
         if (done == 0) {
             if (std::memcmp(buf.data() + 0x36, "FAT16   ", 8) != 0) throw Error("esp.img is not FAT16");
             uint8_t* b = buf.data();
-            for (int i = 0; i < 4; ++i) b[0x1C + i] = espStart > 0xFFFFFFFFull ? 0 : uint8_t(espStart >> (8 * i)); // 0 beyond the FAT BPB's 32-bit range; UEFI uses GPT
+            uint64_t hidden = espStart / (dev.logicalSectorSize() / 512);
+            if (uint32_t(b[11] | uint32_t(b[12]) << 8) != dev.logicalSectorSize()) throw Error("ESP sector size does not match the device");
+            for (int i = 0; i < 4; ++i) b[0x1C + i] = hidden > 0xFFFFFFFFull ? 0 : uint8_t(hidden >> (8 * i));
             for (int i = 0; i < 4; ++i) b[0x27 + i] = uint8_t(serial >> (8 * i));   // volume serial
         }
         dev.write(espOffset + done, buf.data(), n);
@@ -120,7 +123,7 @@ void verify(BlockDevice& dev, const Payload& payload, const std::array<uint8_t, 
         dev.read(kMarkerLba * 512, m.data(), 512);
         if (std::memcmp(m.data(), marker.data(), 512) != 0) throw Error("verification failed: marker");
     }
-    std::ifstream f(payload.espImagePath, std::ios::binary);
+    std::ifstream f(dev.logicalSectorSize() == 4096 ? payload.esp4kImagePath : payload.espImagePath, std::ios::binary);
     const size_t chunk = 4 * kMiB;
     AlignedBuffer disk(chunk);
     std::vector<char> want(chunk);
@@ -152,7 +155,7 @@ uint64_t minimumDiskBytes(uint32_t espMb) {
 std::string incompatibility(const DiskInfo& disk, uint32_t espMb, bool allowNonUsb) {
     if (disk.system) return "holds the running operating system";
     if (!allowNonUsb && !disk.usb && !disk.removable) return "not a USB or removable drive";
-    if (disk.sectorSize != 512) return "uses " + std::to_string(disk.sectorSize) + "-byte sectors (unsupported)";
+    if (disk.sectorSize != 512 && disk.sectorSize != 4096) return "uses " + std::to_string(disk.sectorSize) + "-byte sectors (unsupported)";
     if (disk.sizeBytes < minimumDiskBytes(espMb))
         return "too small (needs at least " + formatSize(minimumDiskBytes(espMb)) + ")";
     return {};
@@ -184,7 +187,7 @@ ExistingInstall detectInstall(BlockDevice& dev) {
 
 ExistingInstall probeInstall(const DiskInfo& disk) {
     try {
-        if (disk.sectorSize != 512) return {};
+        if (disk.sectorSize != 512 && disk.sectorSize != 4096) return {};
         auto dev = openDiskReadOnly(disk);
         return detectInstall(*dev);
     } catch (...) {
@@ -195,8 +198,68 @@ ExistingInstall probeInstall(const DiskInfo& disk) {
 void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel,
              const InstallOptions& options) {
     Steps s(cb, cancel);
-    const Layout l = options.gpt ? computeGptLayout(dev.sizeBytes(), payload.espMb, options.reserveBytes)
+    if (options.shrinkNtfs && !options.preserveData) throw Error("NTFS shrinking requires preserve-data mode");
+    if (dev.logicalSectorSize() == 4096 && (!options.gpt || options.preserveData || payload.esp4kImagePath.empty()))
+        throw Error("4Kn installation requires GPT/UEFI and a payload containing esp4k.img");
+    if (options.preserveData) {
+        if (options.gpt || options.reserveBytes || options.dataFilesystem != "exfat")
+            throw Error("--preserve-data keeps the existing layout/filesystem; do not combine it with layout or format options");
+        AlignedBuffer old(512), boot(512), gap((2048 - 1) * 512);
+        dev.read(0, old.data(), 512);
+        auto get32 = [](const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 |
+                                                       uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; };
+        const auto* p = old.data() + 446;
+        if (old.data()[510] != 0x55 || old.data()[511] != 0xAA || p[4] != 7 || get32(p + 8) != 2048)
+            throw Error("preserve-data requires one MBR NTFS/exFAT partition at LBA 2048");
+        for (int i = 462; i < 510; i++)
+            if (old.data()[i]) throw Error("preserve-data requires MBR slots 2-4 to be empty (GPT/extended layouts are unsupported)");
+        Layout l;
+        l.totalSectors = dev.sizeBytes() / 512; l.dataStart = 2048; l.dataSectors = get32(p + 12);
+        l.espStart = (l.dataStart + l.dataSectors + 2047) / 2048 * 2048;
+        l.espSectors = uint64_t(payload.espMb) * 2048;
+        if (!l.dataSectors || l.dataStart + l.dataSectors > l.totalSectors) throw Error("existing partition is outside the disk");
+        bool needShrink = l.espStart > 0xFFFFFFFFull || l.espSectors > 0xFFFFFFFFull - l.espStart ||
+                          l.espStart + l.espSectors > l.totalSectors;
+        if (needShrink && !options.shrinkNtfs)
+            throw Error("not enough unallocated tail space; use --shrink-ntfs on Linux for NTFS, or shrink externally first");
+        dev.read(l.dataStart * 512, boot.data(), 512);
+        if (std::memcmp(boot.data() + 3, "NTFS    ", 8) && std::memcmp(boot.data() + 3, "EXFAT   ", 8))
+            throw Error("preserve-data supports only NTFS/exFAT");
+        dev.read(512, gap.data(), gap.size());
+        for (size_t i = 0; i < gap.size(); i++)
+            if (gap.data()[i]) throw Error("boot gap is occupied; refusing to overwrite an existing bootloader or metadata");
+        if (needShrink) {
+            if (std::memcmp(boot.data() + 3, "NTFS    ", 8)) throw Error("automatic shrinking supports NTFS only; exFAT requires external preparation");
+            uint64_t available = std::min<uint64_t>(l.totalSectors, 0xFFFFFFFFull);
+            if (available < l.espSectors + l.dataStart + 256ull*2048) throw Error("disk too small for non-destructive shrinking");
+            uint64_t espStart = (available - l.espSectors) / 2048 * 2048;
+            uint64_t dataSectors = espStart - l.dataStart;
+            s.step(0.1, "Checking and shrinking NTFS to make space for the EFI partition");
+            shrinkNtfsPartition(dev, l.dataStart, l.dataSectors, dataSectors);
+            l.dataSectors = dataSectors; l.espStart = espStart;
+        }
+        s.step(needShrink ? 0.45 : 0.55, "Adding EFI partition in unallocated tail space; existing files are preserved");
+        writeEsp(dev, payload, l.espStart, random32(), s);
+        s.step(0.1, "Installing boot code and adding MBR partition 2");
+        auto mbr = replaceBootCode(payload.mbr, old.data());
+        if (needShrink) for (int i=0; i<4; i++) mbr[446+12+i] = uint8_t(l.dataSectors >> (8*i));
+        auto entry = buildMbr(payload.mbr, l, get32(old.data() + 440));
+        std::memcpy(mbr.data() + 462, entry.data() + 462, 16);
+        const auto core = prepareCoreImg(payload.core);
+        const auto marker = buildMarker(payload.version, payload.espMb);
+        s.checkCancel(); writeCore(dev, core); writeSector(dev, kMarkerLba, marker.data());
+        writeSector(dev, 0, mbr.data()); dev.flush();
+        s.step(0.35, "Verifying boot files and preserved partition entry");
+        verify(dev, payload, mbr, core, marker, l.espStart, s);
+        dev.finalize(); s.done();
+        s.log(needShrink ? "Glassboot added after shrinking NTFS; existing files are preserved. Run Windows filesystem checks before using it."
+                         : "Glassboot added without formatting or shrinking the existing data partition.");
+        return;
+    }
+    const Layout l = options.gpt ? computeGptLayout(dev.sizeBytes(), payload.espMb, options.reserveBytes, dev.logicalSectorSize())
                                  : Layout::compute(dev.sizeBytes(), payload.espMb, options.reserveBytes);
+    checkDataFilesystem(options.dataFilesystem, l.dataSectors * 512);
+    if (options.dataFilesystem != "exfat" && dev.backingPath().empty()) throw Error("target cannot be formatted by Linux tools");
     {
         std::ostringstream o;
         o << "Disk: " << formatSize(dev.sizeBytes()) << ", data partition " << formatSize(uint64_t(l.dataSectors) * 512)
@@ -222,16 +285,18 @@ void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& c
     s.log("ESP volume serial " + hex32(espSerial));
 
     // -------------------------------------------------------------- 3. exFAT
-    s.step(0.30, "Formatting data partition (exFAT)");
+    s.step(0.30, "Formatting data partition (" + options.dataFilesystem + ")");
     ExFatOptions ex;
+    ex.bytesPerSector = dev.logicalSectorSize();
     ex.partitionOffsetBytes = uint64_t(l.dataStart) * 512;
     ex.partitionSectors = l.dataSectors;
     ex.label = payload.dataLabel;
     ex.serial = random32();
     ex.files.push_back({"glassboot", "grubenv", grubEnvBlock()});
     ex.files.push_back({"glassboot", "README.txt", readmeText(payload)});
-    formatExFat(dev, ex, [&](double f) { s.sub(f); });
-    s.log("exFAT volume \"" + ex.label + "\" serial " + hex32(ex.serial));
+    if (options.dataFilesystem == "exfat") formatExFat(dev, ex, [&](double f) { s.sub(f); });
+    else formatDataFilesystem(dev, ex, options.dataFilesystem);
+    s.log(options.dataFilesystem + " volume \"" + ex.label + "\"");
 
     if (options.gpt) {
         s.step(0.05, "Installing GPT partition tables (UEFI only)");
@@ -278,6 +343,7 @@ void install(BlockDevice& dev, const Payload& payload, const InstallCallbacks& c
 
 void update(BlockDevice& dev, const Payload& payload, const InstallCallbacks& cb, const std::atomic<bool>& cancel) {
     Steps s(cb, cancel);
+    if (dev.logicalSectorSize() == 4096 && payload.esp4kImagePath.empty()) throw Error("4Kn update requires esp4k.img in the payload");
     const ExistingInstall ex = detectInstall(dev);
     if (!ex.found) throw Error("this drive doesn't contain Glassboot; use Install instead");
     if (ex.espSectors != payload.espMb * 2048u)

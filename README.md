@@ -1,13 +1,27 @@
 # Glassboot
 
 An open-source multi-ISO boot stick. Format a USB drive once, then copy `.iso` files onto
-it and pick one from a menu at boot. It works with Legacy BIOS, UEFI (x86_64) and 32-bit UEFI.
+it and pick one from a menu at boot. It works with Legacy BIOS, UEFI (x86_64), 32-bit UEFI and ARM64 UEFI.
+ARM64 Alpine boots to login in QEMU; use media matching the computer's architecture.
 
 It does the same job as [Ventoy](https://www.ventoy.net/), with one rule: **everything that
 runs at boot is built from source in this repo or from pinned, signature-checked upstream
 releases.** There are no opaque binaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 > **Status: early development.** Not ready for production use yet.
+
+Linux PXE server tooling is available for Ubuntu Casper and Debian Live media.
+See [ARM64 and network boot](docs/ARM64-AND-NETBOOT.md) for setup and current limits.
+
+## Portable builds
+
+Compiled development packages go in `dist/`: a Linux x86_64 **AppImage** and a
+Windows x64 **portable directory/ZIP** containing the GUI, CLI, Qt/runtime libraries
+and boot payload. No separate installer is required. Checksums, CycloneDX inventories
+and provenance accompany the artifacts; local builds are unsigned.
+
+See [docs/RELEASING.md](docs/RELEASING.md) for build/run commands, the Ubuntu 24.04
+Linux runtime baseline, signing, boot-file checks and validation limits.
 
 ## What boots
 
@@ -30,7 +44,7 @@ image (F5), password protection, GRUB themes, and Linux persistence files.
 
 **Settings** go in `glassboot\glassboot.cfg`: default entry, timeout, tree or list view,
 menu names, hidden files, kernel arguments, persistence, password and theme. Edit it with
-**Settings…** in the installer, or with a text editor; see [docs/CONFIG.md](docs/CONFIG.md).
+`glassboot-installer --settings DIR` (the GLASSBOOT drive folder), or with a text editor; see [docs/CONFIG.md](docs/CONFIG.md).
 Folders on the `GLASSBOOT` drive customise boots further:
 
 | Folder / file | Effect |

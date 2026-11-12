@@ -12,6 +12,8 @@
 #
 # Requires scripts/build.sh to have been run. No root needed.
 set -euo pipefail
+export TZ=UTC LC_ALL=C
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1704067200}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${GLASSBOOT_OUT_DIR:-$ROOT/out}"
@@ -67,7 +69,10 @@ mkdir -p "$ESP/EFI/BOOT" "$ESP/boot/grub" "$ESP/boot/glassboot/win"
 "$GRUB/bin/grub-mkimage" -O i386-efi -d "$GRUB/lib/grub/i386-efi" \
   -p /boot/grub -o "$ESP/EFI/BOOT/BOOTIA32.EFI" $CORE_MODS
 
-for plat in i386-pc x86_64-efi i386-efi; do
+"$GRUB/bin/grub-mkimage" -O arm64-efi -d "$GRUB/lib/grub/arm64-efi" \
+  -p /boot/grub -o "$ESP/EFI/BOOT/BOOTAA64.EFI" $CORE_MODS
+
+for plat in i386-pc x86_64-efi i386-efi arm64-efi; do
   mkdir -p "$ESP/boot/grub/$plat"
   cp "$GRUB/lib/grub/$plat/"*.mod "$GRUB/lib/grub/$plat/"*.lst "$ESP/boot/grub/$plat/"
 done
@@ -98,19 +103,27 @@ fi
 HOOK="$OUT/hook/glassboot-hook-x86_64.cpio"
 [[ -f "$HOOK" ]] || { echo "initrd hook not built; run scripts/build.sh hook" >&2; exit 1; }
 cp "$HOOK" "$ESP/boot/glassboot/"
+cp "$OUT/hook/glassboot-hook-arm64.cpio" "$ESP/boot/glassboot/"
 [[ -f "$OUT/winhelper/glassboot-attach.exe" ]] || { echo "Windows helper not built; run scripts/build.sh winhelper" >&2; exit 1; }
 cp "$OUT/winhelper/"*.exe "$ESP/boot/glassboot/win/"
 [[ -f "$OUT/memdisk/memdisk" ]] || { echo "memdisk not built; run scripts/build.sh memdisk" >&2; exit 1; }
 cp "$OUT/memdisk/memdisk" "$ESP/boot/glassboot/"
 cp "$ROOT/versions.env" "$ESP/boot/glassboot/"
 echo "$VERSION" > "$ESP/boot/glassboot/VERSION"
+python3 "$ROOT/scripts/release.py" esp-manifest "$ESP"
+find "$ESP" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 
 # ---------------------------------------------------------------- ESP image
 log "Building esp.img (${ESP_MB} MiB FAT16)"
 # Fixed serial for reproducibility; the installer randomises it per stick.
-mkfs.vfat -C -F 16 -n "$ESP_LABEL" -i 47420001 "$PAYLOAD/esp.img" $((ESP_MB * 1024)) >/dev/null
+mkfs.vfat --invariant -C -F 16 -n "$ESP_LABEL" -i 47420001 "$PAYLOAD/esp.img" $((ESP_MB * 1024)) >/dev/null
 MTOOLS_SKIP_CHECK=1 mcopy -s -Q -m -i "$PAYLOAD/esp.img" "$ESP"/* ::/
+python3 "$ROOT/scripts/fat-normalize.py" "$PAYLOAD/esp.img"
 used=$(MTOOLS_SKIP_CHECK=1 mdu -s -i "$PAYLOAD/esp.img" :: 2>/dev/null | awk '{print $NF}' || true)
+log "Building esp4k.img (UEFI, 4096-byte logical sectors)"
+mkfs.vfat --invariant -C -F 16 -S 4096 -n "$ESP_LABEL" -i 47420001 "$PAYLOAD/esp4k.img" $((ESP_MB * 1024)) >/dev/null
+MTOOLS_SKIP_CHECK=1 mcopy -s -Q -m -i "$PAYLOAD/esp4k.img" "$ESP"/* ::/
+python3 "$ROOT/scripts/fat-normalize.py" "$PAYLOAD/esp4k.img"
 
 # ---------------------------------------------------------------- manifest
 log "Writing manifest"
@@ -120,7 +133,7 @@ log "Writing manifest"
   echo "esp_mb $ESP_MB"
   echo "data_label GLASSBOOT"
   echo "esp_label $ESP_LABEL"
-  for f in mbr.bin core.img esp.img; do
+  for f in mbr.bin core.img esp.img esp4k.img; do
     echo "file $f $(stat -c %s "$PAYLOAD/$f") $(sha256sum "$PAYLOAD/$f" | cut -d' ' -f1)"
   done
 } > "$PAYLOAD/manifest.txt"

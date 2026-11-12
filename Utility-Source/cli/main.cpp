@@ -39,6 +39,10 @@ void usage() {
                  "      refresh the boot files, keeping the ISO files on the drive\n"
                  "\n"
                  "Install options: --gpt (UEFI only), --reserve SIZE (unallocated tail space).\n"
+                 "  --filesystem exfat|ntfs|ext4|xfs|udf (non-exFAT formats require Linux)\n"
+                 "  --preserve-data (existing MBR NTFS/exFAT partition + free tail; no shrinking)\n"
+                 "  --shrink-ntfs (Linux: preserve-data plus NTFS shrink if tail space is needed)\n"
+                 "  --sector-size 512|4096 (image files only; 4096 requires --gpt)\n"
                  "SIZE accepts M/G suffixes (e.g. 8G). ID is shown by 'list'.\n";
 }
 
@@ -69,12 +73,15 @@ std::string exeDir(const char* argv0) {
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     if (args.empty()) { usage(); return 2; }
+    if (args[0] == "--help" || args[0] == "-h") { usage(); return 0; }
+    if (args[0] == "--version") { std::cout << "Glassboot " << GLASSBOOT_INSTALLER_VERSION << "\n"; return 0; }
     std::signal(SIGINT, [](int) { g_cancel = true; });
 
     try {
         const std::string cmd = args[0];
         std::string device, image, payloadDir, size;
         bool yes = false, all = false;
+        uint32_t imageSectorSize = 512;
         InstallOptions options;
         for (size_t i = 1; i < args.size(); ++i) {
             auto next = [&]() -> std::string {
@@ -87,6 +94,14 @@ int main(int argc, char** argv) {
             else if (args[i] == "--payload") payloadDir = next();
             else if (args[i] == "--gpt") options.gpt = true;
             else if (args[i] == "--reserve") options.reserveBytes = parseSize(next());
+            else if (args[i] == "--filesystem") options.dataFilesystem = next();
+            else if (args[i] == "--preserve-data") options.preserveData = true;
+            else if (args[i] == "--shrink-ntfs") { options.preserveData = true; options.shrinkNtfs = true; }
+            else if (args[i] == "--sector-size") {
+                auto value = next();
+                if (value != "512" && value != "4096") throw Error("--sector-size accepts 512 or 4096");
+                imageSectorSize = uint32_t(std::stoul(value));
+            }
             else if (args[i] == "--yes") yes = true;
             else if (args[i] == "--all") all = true;
             else throw Error("unknown option " + args[i]);
@@ -112,9 +127,10 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (cmd != "install" && cmd != "update") { usage(); return 2; }
+        if (image.empty() && imageSectorSize != 512) throw Error("--sector-size is for images; physical disks are detected automatically");
         const bool isUpdate = cmd == "update";
-        if (isUpdate && (options.gpt || options.reserveBytes))
-            throw Error("--gpt and --reserve apply only to install; update keeps the layout");
+        if (isUpdate && (options.gpt || options.reserveBytes || options.preserveData || options.dataFilesystem != "exfat"))
+            throw Error("layout, filesystem and preserve-data options apply only to install");
 
         if (payloadDir.empty()) payloadDir = Payload::locate(exeDir(argv[0]));
         if (payloadDir.empty()) throw Error("payload not found; pass --payload DIR");
@@ -124,7 +140,8 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<BlockDevice> dev;
         if (!image.empty()) {
-            if (isUpdate) {
+            if (isUpdate || options.preserveData) {
+                if (!size.empty()) throw Error("--size is not allowed when opening an existing image");
                 dev = openImageFile(image, true);
             } else {
                 if (size.empty()) throw Error("--image needs --size");
@@ -147,7 +164,9 @@ int main(int argc, char** argv) {
             if (isUpdate && !existing.found) throw Error("no Glassboot installation on " + device + "; use install");
             if (!yes) {
                 std::cout << (isUpdate ? "The boot files will be updated; ISO files are kept. Type YES to continue: "
-                                       : "ALL DATA ON THIS DISK WILL BE ERASED. Type YES to continue: ")
+                                       : options.shrinkNtfs ? "NTFS may be shrunk and boot code/EFI files installed; existing files are kept. Type YES to continue: "
+                                       : options.preserveData ? "Boot code and free tail space will be written; existing files are kept. Type YES to continue: "
+                                                              : "ALL DATA ON THIS DISK WILL BE ERASED. Type YES to continue: ")
                           << std::flush;
                 std::string answer;
                 std::getline(std::cin, answer);
@@ -157,6 +176,7 @@ int main(int argc, char** argv) {
         } else {
             throw Error(cmd + " needs --device or --image");
         }
+        if (!image.empty()) dev = sectorView(std::move(dev), imageSectorSize);
 
         // A live progress line only makes sense on a terminal; logs go to stdout either way.
         const bool tty = isatty(fileno(stderr));

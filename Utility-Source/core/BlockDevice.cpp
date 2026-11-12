@@ -78,7 +78,7 @@ class ImageFile : public BlockDevice {
 public:
     // create: truncate/create the file at `size`. Otherwise open it as it is.
     ImageFile(const std::string& path, uint64_t size, bool create, bool writable)
-        : size_(size), writable_(writable) {
+        : path_(path), size_(size), writable_(writable) {
 #ifdef _WIN32
         int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
         std::wstring wpath(size_t(wn > 0 ? wn : 1), L'\0');
@@ -116,6 +116,7 @@ public:
 #endif
     }
     uint64_t sizeBytes() const override { return size_; }
+    std::string backingPath() const override { return path_; }
 
     void write(uint64_t off, const void* data, size_t len) override {
         check(off, len);
@@ -170,6 +171,7 @@ private:
 #else
     int fd_ = -1;
 #endif
+    std::string path_;
     uint64_t size_;
     bool writable_;
 };
@@ -183,6 +185,42 @@ std::unique_ptr<BlockDevice> createImageFile(const std::string& path, uint64_t s
 
 std::unique_ptr<BlockDevice> openImageFile(const std::string& path, bool writable) {
     return std::make_unique<ImageFile>(path, 0, false, writable);
+}
+
+namespace {
+class SectorView final : public BlockDevice {
+    std::unique_ptr<BlockDevice> dev_;
+    uint32_t sector_;
+public:
+    SectorView(std::unique_ptr<BlockDevice> dev, uint32_t sector) : dev_(std::move(dev)), sector_(sector) {
+        if (sector != 512 && sector != 4096) throw Error("unsupported logical sector size");
+        if (dev_->sizeBytes() % sector) throw Error("disk size is not sector aligned");
+    }
+    uint64_t sizeBytes() const override { return dev_->sizeBytes(); }
+    std::string backingPath() const override { return dev_->backingPath(); }
+    uint32_t logicalSectorSize() const override { return sector_; }
+    void read(uint64_t off, void* out, size_t len) override { transfer(off, out, len, false); }
+    void write(uint64_t off, const void* in, size_t len) override { transfer(off, const_cast<void*>(in), len, true); }
+    void transfer(uint64_t off, void* data, size_t len, bool writing) {
+        if (off % 512 || len % 512 || off > sizeBytes() || len > sizeBytes() - off) throw Error("unaligned or out-of-range sector view I/O");
+        auto* bytes = static_cast<uint8_t*>(data);
+        while (len) {
+            uint64_t start = off / sector_ * sector_;
+            size_t skip = size_t(off - start), n = std::min<size_t>(len, 4 * 1024 * 1024 - skip);
+            size_t aligned = (skip + n + sector_ - 1) / sector_ * sector_;
+            AlignedBuffer buffer(aligned);
+            if (!writing || skip || skip + n != aligned) dev_->read(start, buffer.data(), aligned);
+            if (writing) { std::memcpy(buffer.data() + skip, bytes, n); dev_->write(start, buffer.data(), aligned); }
+            else std::memcpy(bytes, buffer.data() + skip, n);
+            bytes += n; off += n; len -= n;
+        }
+    }
+    void flush() override { dev_->flush(); }
+    void finalize() override { dev_->finalize(); }
+};
+}
+std::unique_ptr<BlockDevice> sectorView(std::unique_ptr<BlockDevice> dev, uint32_t sector) {
+    return std::make_unique<SectorView>(std::move(dev), sector);
 }
 
 } // namespace glassboot
