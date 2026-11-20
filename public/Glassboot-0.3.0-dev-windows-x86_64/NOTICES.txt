@@ -1,0 +1,19 @@
+Glassboot portable distribution
+
+This package includes Glassboot and its verified boot payload, Qt and runtime
+libraries. Source and build instructions are in the Glassboot repository. Each
+component retains its own license; the SBOM is a bundled-file inventory and does
+not relicense dependencies or assert that their license review is complete.
+
+GRUB: GNU GPL version 3 or later, https://www.gnu.org/software/grub/
+wimboot / memdisk: see the pinned upstream sources in versions.env.
+Qt: LGPL version 3 / GPL / commercial alternatives as applicable to each module.
+Qt source: https://download.qt.io/archive/qt/
+Qt licensing: https://doc.qt.io/qt-6/licensing.html
+Windows Microsoft C/C++ runtime DLLs retain Microsoft's redistribution terms.
+AppImage runtime: MIT, https://github.com/AppImage/type2-runtime
+Squashfuse: BSD-2-Clause, https://github.com/vasi/squashfuse
+
+The release.json file records source pins. files.sha256 covers bundled content.
+The outer SHA256SUMS covers release artifacts. Only a signature from a separately
+trusted maintainer key establishes the origin of these hashes.
