@@ -108,7 +108,8 @@ def prepare(args):
         stage = Path(temp) / 'tree'
         cfgdir = stage / 'boot/grub'
         cfgdir.mkdir(parents=True)
-        menu = ['set timeout=-1', 'set default=0', 'insmod http', 'insmod linux',
+        colors = (ROOT / 'boot/grub/glassboot-colors.cfg').read_text(encoding='utf-8')
+        menu = [*colors.splitlines(), 'set timeout=-1', 'set default=0', 'insmod http', 'insmod linux',
                 'insmod echo', 'insmod read']
         inventory = []
         for iso in isos:
