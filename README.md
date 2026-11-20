@@ -12,6 +12,7 @@
   <a href="#quick-start">🚀 Quick start</a> ·
   <a href="#how-it-works">⚙️ How it works</a> ·
   <a href="#compatibility">💿 Compatibility</a> ·
+  <a href="#qemu-screenshots">📸 QEMU screenshots</a> ·
   <a href="#build-from-source">🛠️ Build from source</a> ·
   <a href="ROADMAP.md">🗺️ Roadmap</a>
 </p>
@@ -87,6 +88,22 @@ The build compiles the boot components from in-repo source and pinned, verified 
 
 Glassboot also has Linux **PXE** tooling for Ubuntu Casper and Debian Live media. Use the [ARM64 and network boot guide](docs/ARM64-AND-NETBOOT.md), [disk image and FreeBSD validation](docs/DISK-IMAGE-VALIDATION.md), and [roadmap](ROADMAP.md) for the tested cases and known limits.
 
+<a name="qemu-screenshots"></a>
+
+## 📸 Alpine Linux boot in QEMU
+
+These screenshots show the legacy BIOS boot of **Alpine Linux 3.24.4 (x86-64)**, the ISO pinned in the [release boot test](Utility-Source/tests/release-iso-test.sh). Glassboot found `Alpine.iso` on the virtual USB drive, opened Alpine’s **Linux lts** entry, and booted to the live login prompt.
+
+| 1. Select `Alpine.iso` in Glassboot | 2. Start Alpine’s Linux LTS entry |
+| --- | --- |
+| [![Glassboot’s black and red menu with Alpine.iso selected](docs/assets/qemu-alpine-glassboot-menu.png)](docs/assets/qemu-alpine-glassboot-menu.png) | [![Alpine’s Linux lts entry selected in the ISO boot menu](docs/assets/qemu-alpine-linux-entry.png)](docs/assets/qemu-alpine-linux-entry.png) |
+
+**3. Alpine reaches the live login prompt**
+
+[![Alpine Linux live console showing localhost login after OpenRC startup](docs/assets/qemu-alpine-live-login.png)](docs/assets/qemu-alpine-live-login.png)
+
+Try it with [the QEMU commands below](#test-in-qemu).
+
 <a name="build-from-source"></a>
 
 ## 🛠️ Build from source
@@ -155,6 +172,8 @@ bash scripts/package-linux.sh
 The AppImage is written to `dist/`. See the [release guide](docs/RELEASING.md) for packaging and the [installer reference](Utility-Source/README.md) for CLI-only builds.
 
 </details>
+
+<a name="test-in-qemu"></a>
 
 ### 🧪 Test without a USB drive
 
