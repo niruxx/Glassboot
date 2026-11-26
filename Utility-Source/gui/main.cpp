@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QLibraryInfo>
 #include <QLocale>
 #include <QMessageBox>
@@ -14,8 +15,10 @@
 int main(int argc, char** argv) {
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
-    glassboot::applyTheme(app);
+    QApplication::setOrganizationName("Glassboot");
     QApplication::setApplicationName("Glassboot Installer");
+    glassboot::applyTheme(app);
+    app.setWindowIcon(QIcon(":/platform/windows/glassboot.ico"));
     QApplication::setApplicationVersion(GLASSBOOT_INSTALLER_VERSION);
 
     // Translations (translations/glassboot_<lang>.ts, compiled into the program), plus Qt's

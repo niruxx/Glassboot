@@ -88,43 +88,6 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     auto* pages = new QStackedWidget;
     shellLayout->addWidget(pages, 1);
     setCentralWidget(shell);
-    setStyleSheet(R"(
-        QMainWindow { background: #edf1fc; color: #202b49; }
-        QDialog, QMessageBox { background: #f7f8fe; color: #202b49; }
-        QStackedWidget, QScrollArea, QWidget#page { background: transparent; border: none; }
-        QWidget { font-size: 14px; }
-        QLabel { color: #202b49; background: transparent; }
-        QLabel[muted="true"] { color: #52617f; }
-        QPushButton { color: #34466e; border: none; padding: 10px 20px; min-height: 24px; font-weight: 600; }
-        QDialog QPushButton { background: #e8edfc; border: 1px solid white; border-radius: 18px; }
-        QDialog QPushButton:hover { background: #dce4fc; }
-        QDialog QPushButton:default { background: #5266c9; color: white; }
-        QPushButton:disabled { color: #71809b; }
-        QComboBox { background: rgba(255, 255, 255, 160); color: #263657;
-            border: 1px solid rgba(255, 255, 255, 240); border-radius: 15px;
-            padding: 11px 16px; min-height: 22px; }
-        QComboBox:hover { background: rgba(255, 255, 255, 220); border-color: #b4c3ee; }
-        QComboBox:focus { border: 1px solid #778ed9; }
-        QComboBox:disabled { color: #71809b; background: rgba(255, 255, 255, 90); }
-        QComboBox::drop-down { border: none; width: 32px; }
-        QComboBox::down-arrow { image: url(:/gui/chevron.xpm); width: 12px; height: 8px; }
-        QComboBox QAbstractItemView { background: #f7f8fe; color: #263657;
-            selection-background-color: #dce5ff; selection-color: #263657; padding: 8px; border-radius: 12px; }
-        QToolButton { color: #5267a5; border: none; padding: 6px; background: transparent; }
-        QToolButton:hover { background: rgba(255, 255, 255, 140); border-radius: 10px; }
-        QProgressBar { background: rgba(132, 152, 199, 45); border: 1px solid rgba(255, 255, 255, 160);
-            border-radius: 4px; height: 8px; max-height: 8px; }
-        QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 #7eabf0, stop:0.5 #6f7bdd, stop:1 #a68cdb); border-radius: 3px; }
-        QPlainTextEdit { background: #f1f4fd; color: #263657; border: 1px solid #d6dff5; border-radius: 14px; padding: 10px; }
-        QToolTip { background: #344466; color: white; border: none; padding: 7px; }
-        QMessageBox QLabel { color: #202b49; }
-        QScrollBar:vertical { background: transparent; width: 7px; margin: 3px 0; }
-        QScrollBar::handle:vertical { background: rgba(110, 130, 180, 95); min-height: 24px; border-radius: 3px; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-    )");
-    shell->setObjectName("shell");
     auto makePage = [pages](QWidget* content) {
         content->setObjectName("page");
         auto* scroll = new QScrollArea;
@@ -144,7 +107,7 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     auto* mark = new QLabel(QStringLiteral("G"));
     mark->setAlignment(Qt::AlignCenter);
     mark->setFixedSize(80, 80);
-    mark->setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #b1c9ff, stop:0.45 #7c95e4, stop:1 #9b7ddc); color: white; border: 2px solid rgba(255,255,255,210); border-radius: 28px; font-size: 42px; font-weight: 600;");
+    mark->setObjectName("welcomeMark");
     intro->addWidget(mark, 0, Qt::AlignHCenter);
     auto* title = new QLabel(tr("Welcome to Glassboot"));
     title->setAlignment(Qt::AlignCenter);
@@ -156,7 +119,7 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     description->setWordWrap(true);
     description->setProperty("muted", true);
     intro->addWidget(description);
-    auto* begin = new GlassButton(tr("Get started"));
+    auto* begin = new QPushButton(tr("Get started"));
     begin->setObjectName("getStarted");
     begin->setProperty("primary", true);
     intro->addWidget(begin, 0, Qt::AlignHCenter);
@@ -173,8 +136,7 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     heading->setAlignment(Qt::AlignCenter);
     heading->setStyleSheet("font-size: 26px; font-weight: 700;");
     root->addWidget(heading);
-    auto* card = new GlassPanel;
-    deviceCard_ = card;
+    auto* card = new QFrame;
     card->setObjectName("card");
     auto* deviceLayout = new QVBoxLayout(card);
     deviceLayout->setContentsMargins(18, 16, 18, 16);
@@ -184,7 +146,7 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     deviceLabel->setStyleSheet("font-weight: 700;");
     deviceHeader->addWidget(deviceLabel);
     deviceHeader->addStretch();
-    refreshButton_ = new GlassButton(tr("Refresh"));
+    refreshButton_ = new QPushButton(tr("Refresh"));
     deviceHeader->addWidget(refreshButton_);
     deviceLayout->addLayout(deviceHeader);
     list_ = new QComboBox;
@@ -208,8 +170,7 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     root->addStretch();
     makePage(central);
 
-    auto* dock = new GlassPanel;
-    statusPanel_ = dock;
+    auto* dock = new QFrame;
     dock->setObjectName("dock");
     auto* dockLayout = new QVBoxLayout(dock);
     dockLayout->setContentsMargins(20, 12, 20, 16);
@@ -237,12 +198,12 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     auto* actions = new QWidget;
     auto* buttons = new QHBoxLayout(actions);
     buttons->setContentsMargins(0, 0, 0, 0);
-    cancelButton_ = new GlassButton(tr("Cancel"));
+    cancelButton_ = new QPushButton(tr("Cancel"));
     cancelButton_->hide();
-    installButton_ = new GlassButton(tr("&Install"));
+    installButton_ = new QPushButton(tr("&Install"));
     installButton_->setObjectName("installAction");
     installButton_->setProperty("primary", true);
-    updateButton_ = new GlassButton(tr("&Update"));
+    updateButton_ = new QPushButton(tr("&Update"));
     updateButton_->setObjectName("updateAction");
     updateButton_->setProperty("primary", true);
     updateButton_->hide();
@@ -267,14 +228,13 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     details->resize(520, 300);
     connect(detailsToggle_, &QToolButton::clicked, details, [details] { details->show(); details->raise(); });
 
-    connect(begin, &QPushButton::clicked, this, [this, pages, actions, card] {
+    connect(begin, &QPushButton::clicked, this, [this, pages, actions] {
         crossfade(pages, [this, pages, actions] {
             pages->setCurrentIndex(1);
             actions->show();
             updateButtons();
             list_->setFocus();
         });
-        card->animateChange();
     });
     progressAnimation_ = new QPropertyAnimation(progress_, "value", this);
     progressAnimation_->setDuration(motionDuration(220));
@@ -288,13 +248,9 @@ MainWindow::MainWindow(const QString& payloadDir, const QString& testImage, quin
     connect(pulse_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
         statusDot_->setStyleSheet(QString("background: %1; border-radius: 5px;").arg(value.value<QColor>().name()));
     });
-    connect(list_, &QComboBox::currentIndexChanged, this, [this, card] {
-        updateButtons();
-        card->animateChange();
-    });
+    connect(list_, &QComboBox::currentIndexChanged, this, &MainWindow::updateButtons);
     connect(refreshButton_, &QPushButton::clicked, this, [this, card] {
         crossfade(card, [this] { refreshDrives(); });
-        card->animateChange();
     });
     connect(installButton_, &QPushButton::clicked, this, &MainWindow::startInstall);
     connect(updateButton_, &QPushButton::clicked, this, &MainWindow::startUpdate);
@@ -457,9 +413,7 @@ void MainWindow::updateButtons() {
 
 void MainWindow::setBusy(bool busy) {
     busy_ = busy;
-    deviceCard_->animateChange();
-    statusPanel_->animateChange();
-    if (busy) pulse_->start();
+    if (busy && motionDuration(1400)) pulse_->start();
     else {
         pulse_->stop();
         statusDot_->setStyleSheet("background: #6b82ce; border-radius: 5px;");
@@ -564,7 +518,6 @@ void MainWindow::onProgress(int permille, const QString& step) {
     if (lastStep_ != step) {
         lastStep_ = step;
         crossfade(status_, [this, text] { status_->setText(text); });
-        statusPanel_->animateChange();
     } else status_->setText(text);
 }
 

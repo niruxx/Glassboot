@@ -695,6 +695,10 @@ Install Glassboot, then copy your ISO files onto the drive.</translation>
     <context>
         <name>glassboot::TitleBar</name>
         <message>
+            <source>Dark mode</source>
+            <translation>Dark mode</translation>
+        </message>
+        <message>
             <source>Minimize</source>
             <translation>Minimize</translation>
         </message>

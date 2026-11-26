@@ -25,7 +25,6 @@ class QToolButton;
 namespace glassboot {
 
 class InstallWorker;
-class GlassPanel;
 
 // Welcome and USB preparation screens.
 class MainWindow : public QMainWindow {
@@ -72,8 +71,6 @@ private:
     QLabel* driveInfo_ = nullptr;
     QLabel* notice_ = nullptr;
     bool positioned_ = false;
-    GlassPanel* deviceCard_ = nullptr;
-    GlassPanel* statusPanel_ = nullptr;
     QString lastStep_;
     QLabel* statusDot_ = nullptr;
     QPropertyAnimation* progressAnimation_ = nullptr;

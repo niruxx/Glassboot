@@ -1,2 +1,4 @@
 #include <winuser.h>
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "glassboot.manifest"
+
+101 ICON "glassboot.ico"

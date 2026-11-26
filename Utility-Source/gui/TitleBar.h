@@ -11,11 +11,13 @@
 #include <QWindow>
 #include <QVariantAnimation>
 #include <QFocusEvent>
-#include <QLinearGradient>
+#include <QToolButton>
+#include "GlassWidgets.h"
+#include "Theme.h"
 
 namespace glassboot {
 
-// Vector glyphs and painted glass highlights remain crisp at every display scale.
+// Vector glyphs stay crisp at every display scale.
 class WindowButton final : public QAbstractButton {
 public:
     enum Kind { Minimize, Maximize, Close };
@@ -25,7 +27,7 @@ public:
         setFocusPolicy(Qt::StrongFocus);
         setCursor(Qt::ArrowCursor);
         hover_ = new QVariantAnimation(this);
-        hover_->setDuration(170);
+        hover_->setDuration(motionDuration(170));
         hover_->setEasingCurve(QEasingCurve::OutCubic);
         connect(hover_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
             highlight_ = value.toReal();
@@ -39,25 +41,19 @@ protected:
         const QRectF surface = QRectF(rect()).adjusted(2.5, 2.5, -2.5, -2.5);
         if (highlight_ > 0.001 || isDown()) {
             const qreal strength = isDown() ? 1.0 : highlight_;
-            QLinearGradient glass(surface.topLeft(), surface.bottomLeft());
-            if (kind_ == Close) {
-                glass.setColorAt(0, QColor(255, 231, 235, qRound(220 * strength)));
-                glass.setColorAt(1, QColor(250, 204, 214, qRound(165 * strength)));
-            } else {
-                glass.setColorAt(0, QColor(255, 255, 255, qRound(235 * strength)));
-                glass.setColorAt(1, QColor(202, 213, 250, qRound(150 * strength)));
-            }
-            painter.setBrush(glass);
-            painter.setPen(QPen(QColor(255, 255, 255, qRound(210 * strength)), 1));
-            painter.drawRoundedRect(surface, 10, 10);
+            QColor fill = kind_ == Close ? QColor("#e46676") : palette().highlight().color();
+            fill.setAlpha(qRound((isDown() ? 100 : 55) * strength));
+            painter.setBrush(fill);
+            painter.setPen(Qt::NoPen);
+            painter.drawRoundedRect(surface, 5, 5);
         }
         if (hasFocus()) {
             painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(QColor("#7184dc"), 1.2));
-            painter.drawRoundedRect(surface, 10, 10);
+            painter.setPen(QPen(palette().highlight().color(), 1.2));
+            painter.drawRoundedRect(surface, 5, 5);
         }
         painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(kind_ == Close && highlight_ > 0.1 ? QColor("#a73b50") : QColor("#43517c"), 1.5));
+        painter.setPen(QPen(palette().windowText().color(), 1.5));
         const QPointF c = QRectF(rect()).center() + QPointF(0, isDown() ? 0.5 : 0);
         if (kind_ == Minimize) painter.drawLine(c + QPointF(-5, 3), c + QPointF(5, 3));
         else if (kind_ == Close) {
@@ -96,15 +92,24 @@ public:
         setObjectName("titleBar");
         setAttribute(Qt::WA_StyledBackground);
         setFixedHeight(48);
-        setStyleSheet("QWidget#titleBar { background: rgba(255, 255, 255, 70); border-bottom: 1px solid rgba(255, 255, 255, 150); }");
         auto* row = new QHBoxLayout(this);
         row->setContentsMargins(16, 7, 8, 7);
         row->setSpacing(4);
         auto* brand = new QLabel("Glassboot");
-        brand->setStyleSheet("color: #303a63; font-weight: 600; font-size: 14px; background: transparent;");
+        brand->setStyleSheet("font-weight: 600; font-size: 14px; background: transparent;");
         brand->setAttribute(Qt::WA_TransparentForMouseEvents);
         row->addWidget(brand);
         row->addStretch();
+        auto* theme = new QToolButton(this);
+        theme->setObjectName("darkMode");
+        theme->setText(QCoreApplication::translate("glassboot::TitleBar", "Dark mode"));
+        theme->setCheckable(true);
+        theme->setChecked(darkModeEnabled());
+        row->addWidget(theme);
+        connect(theme, &QToolButton::toggled, this, [](bool dark) {
+            saveDarkMode(dark);
+            setDarkMode(*qApp, dark);
+        });
         auto* minimize = new WindowButton(WindowButton::Minimize, owner, this);
         maximize_ = new WindowButton(WindowButton::Maximize, owner, this);
         auto* close = new WindowButton(WindowButton::Close, owner, this);

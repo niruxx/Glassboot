@@ -1,9 +1,0 @@
-# Glassboot payload manifest
-version 0.3.0-dev
-esp_mb 64
-data_label GLASSBOOT
-esp_label GLASS_EFI
-file mbr.bin 512 6343b7e9f06388566ea5b6e8a3535fbaec1f695a0b3793caee5386237d4d3450
-file core.img 140347 19cae290b59f0556c3f7fa8fe5ec25beaf2403f96f5394760f36bb5c2965b6c1
-file esp.img 67108864 ae073bd484dacd583db9c9a0417c6ed9ac994ce22a92b91e8fc8fd991ae43a5a
-file esp4k.img 67108864 ac8ca8f7a5d24fa7a7dd8dee35aff71e9f31bcfddcf354cbfc80f7acfefa19b6

@@ -696,6 +696,10 @@ Instala Glassboot y copia tus archivos ISO en la unidad.</translation>
     <context>
         <name>glassboot::TitleBar</name>
         <message>
+            <source>Dark mode</source>
+            <translation>Modo oscuro</translation>
+        </message>
+        <message>
             <source>Minimize</source>
             <translation>Minimizar</translation>
         </message>

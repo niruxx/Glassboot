@@ -62,7 +62,7 @@ if(GLASSBOOT_BUILD_GUI)
     gui/ConfigDialog.cpp gui/ConfigDialog.h
   )
   qt_add_resources(glassboot-installer gui_assets
-    PREFIX "/" FILES gui/chevron.xpm)
+    PREFIX "/" FILES gui/chevron.xpm platform/windows/glassboot.ico)
   if(WIN32)
     # The .rc embeds a manifest that requests administrator rights (raw disk access).
     target_sources(glassboot-installer PRIVATE platform/windows/gui.rc)

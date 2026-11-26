@@ -51,13 +51,12 @@ int main(int argc, char** argv) {
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
     qInstallMessageHandler(messages);
-    QPalette dark;
-    dark.setColor(QPalette::Window, Qt::black);
-    dark.setColor(QPalette::WindowText, Qt::white);
-    app.setPalette(dark);
-    glassboot::applyTheme(app);
     QTemporaryDir temp;
     require(temp.isValid(), "Could not create test directory");
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temp.path());
+    app.setOrganizationName("Glassboot GUI Test");
+    glassboot::applyTheme(app);
     // This fixture only lists an image. Missing payload prevents all writes.
     glassboot::MainWindow window(temp.path(), temp.filePath("never-written.img"), 1024ULL << 20);
     window.show();
@@ -93,6 +92,29 @@ int main(int argc, char** argv) {
     auto* drive = window.findChild<QComboBox*>("driveSelector");
     require(begin && install && drive, "Missing primary controls");
     require(begin->isVisible() && !install->isVisible(), "Welcome flow is incorrect");
+    auto* theme = window.findChild<QAbstractButton*>("darkMode");
+    require(theme && theme->isChecked(), "Dark mode is not enabled by default");
+    require(titleBar->grab().toImage().pixelColor(4, 10).lightness() < 70,
+            "Title bar did not start in dark mode");
+    theme->click();
+    settle();
+    require(!glassboot::darkModeEnabled(), "Light mode preference was not saved");
+    glassboot::applyTheme(app);
+    require(app.palette().color(QPalette::Window).lightness() > 220,
+            "Saved light mode did not override the dark default");
+    theme->click();
+    settle();
+    require(glassboot::darkModeEnabled(), "Dark mode preference was not saved");
+    require(titleBar->grab().toImage().pixelColor(4, 10).lightness() < 70,
+            "Title bar did not repaint in dark mode");
+    auto* shell = window.centralWidget();
+    const QRect backdrop(8, 55, 100, 40);
+    const auto first = shell->grab(backdrop).toImage();
+    settle();
+    const auto second = shell->grab(backdrop).toImage();
+    require(first.pixelColor(0, 0).lightness() < 70, "Backdrop did not repaint in dark mode");
+    require((first != second) == !qEnvironmentVariableIntValue("GLASSBOOT_REDUCED_MOTION"),
+            "Backdrop animation did not respect the reduced-motion setting");
     begin->click();
     settle();
     // A host with physical USB drives must not change which device this test targets.
@@ -131,12 +153,17 @@ int main(int argc, char** argv) {
         "Everything on the selected drive will be erased.", QMessageBox::Cancel, &window);
     confirmation.show();
     settle();
-    require(confirmation.palette().color(QPalette::Window).lightness() > 220,
-            "Confirmation inherited a dark background");
+    require(confirmation.palette().color(QPalette::Window).lightness() < 70,
+            "Confirmation did not inherit dark mode");
     require(contrast(confirmation.palette().color(QPalette::WindowText),
                      confirmation.palette().color(QPalette::Window)) >= 4.5,
             "Confirmation text has insufficient contrast");
     confirmation.close();
+    theme->click();
+    settle();
+    require(!glassboot::darkModeEnabled(), "Light mode preference was not saved");
+    require(titleBar->grab().toImage().pixelColor(4, 10).lightness() > 220,
+            "Title bar did not repaint in light mode");
     close->click();
     settle();
     require(!window.isVisible(), "Close control failed");
