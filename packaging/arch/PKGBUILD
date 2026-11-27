@@ -1,0 +1,33 @@
+pkgname=glassboot
+pkgver=@PACKAGE_VERSION@
+pkgrel=1
+pkgdesc='Create and update Glassboot multiboot USB drives'
+arch=('x86_64')
+url='https://github.com/niruxx/Glassboot'
+license=('LicenseRef-Glassboot-Unspecified' 'GPL-3.0-or-later' 'GPL-2.0-or-later')
+depends=('gcc-libs' 'glibc' 'qt6-base' 'qt6-svg' 'qt6-wayland' 'polkit' 'ttf-font' 'util-linux' 'e2fsprogs')
+makedepends=('cmake' 'ninja' 'python' 'qt6-tools' 'desktop-file-utils')
+optdepends=('ntfs-3g: NTFS data partitions' 'xfsprogs: XFS data partitions' 'udftools: UDF data partitions')
+source=('@SOURCE_NAME@.tar.gz')
+sha256sums=('@SOURCE_SHA256@')
+options=('!debug')
+
+build() {
+  cd "$srcdir/@SOURCE_NAME@"
+  cmake -S Utility-Source -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build build
+}
+
+check() {
+  cd "$srcdir/@SOURCE_NAME@"
+  ctest --test-dir build --output-on-failure
+  desktop-file-validate packaging/glassboot.desktop
+}
+
+package() {
+  cd "$srcdir/@SOURCE_NAME@"
+  DESTDIR="$pkgdir" cmake --install build
+  python3 scripts/release.py stage-native-payload payload "$pkgdir/usr/share/glassboot/payload"
+  install -Dm644 versions.env "$pkgdir/usr/share/doc/glassboot/versions.env"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/glassboot" packaging/licenses/GPL-{2,3}.txt
+}

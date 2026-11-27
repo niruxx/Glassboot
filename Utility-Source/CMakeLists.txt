@@ -82,6 +82,10 @@ if(GLASSBOOT_BUILD_GUI)
   endif()
 
   install(TARGETS glassboot-installer RUNTIME DESTINATION bin)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(FILES ../packaging/glassboot.desktop DESTINATION share/applications)
+    install(FILES ../packaging/glassboot.svg DESTINATION share/icons/hicolor/scalable/apps)
+  endif()
 endif()
 
 install(TARGETS glassboot-cli RUNTIME DESTINATION bin)

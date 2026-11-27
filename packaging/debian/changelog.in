@@ -1,0 +1,5 @@
+glassboot (@PACKAGE_VERSION@-1) unstable; urgency=medium
+
+  * Build the Glassboot GUI, CLI, and verified boot payload.
+
+ -- Glassboot maintainers <perezkyle98@protonmail.com>  @CHANGELOG_DATE@

@@ -1,0 +1,9 @@
+Upstream-Name: Glassboot
+Source: https://github.com/niruxx/Glassboot
+
+The checkout does not declare a license for the Glassboot application.
+GRUB in the boot payload is licensed under GPL version 3 or later.
+wimboot and Syslinux memdisk are licensed under GPL version 2 or later.
+The bundled versions.env records the upstream source versions and pins.
+The GPL texts are in /usr/share/common-licenses/GPL-3 and
+/usr/share/common-licenses/GPL-2 on Debian systems.

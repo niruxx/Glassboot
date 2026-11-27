@@ -58,6 +58,13 @@ def copy_payload(source, dest):
         shutil.copy2(source/name, dest/name)
 
 
+def stage_native_payload(source, dest):
+    manifest = (source/'manifest.txt').read_text(encoding='utf-8').splitlines()
+    if [line.split() for line in manifest if line.startswith('version ')] != [['version', VERSION]]:
+        raise ValueError('boot payload version must match Glassboot '+VERSION)
+    copy_payload(source, dest)
+
+
 def json_file(path, data):
     path.write_text(json.dumps(data, indent=2, sort_keys=True)+'\n', encoding='utf-8', newline='\n')
 
@@ -200,6 +207,7 @@ def main():
     p = sub.add_parser('inventory'); p.add_argument('root',type=Path); p.add_argument('platform')
     p = sub.add_parser('zip'); p.add_argument('root',type=Path); p.add_argument('output',type=Path)
     p = sub.add_parser('linux-stage'); p.add_argument('build',type=Path); p.add_argument('payload',type=Path); p.add_argument('stage',type=Path)
+    p = sub.add_parser('stage-native-payload'); p.add_argument('source',type=Path); p.add_argument('dest',type=Path)
     p = sub.add_parser('hashes'); p.add_argument('dist',type=Path)
     sub.add_parser('version')
     args = parser.parse_args()
@@ -210,8 +218,10 @@ def main():
     elif args.cmd == 'inventory': inventory(args.root,args.platform)
     elif args.cmd == 'zip': archive(args.root,args.output)
     elif args.cmd == 'linux-stage': linux_stage(args.build,args.payload,args.stage)
+    elif args.cmd == 'stage-native-payload': stage_native_payload(args.source,args.dest)
     elif args.cmd == 'hashes':
-        artifacts = sorted(p for p in args.dist.iterdir() if p.is_file() and (p.suffix in {'.AppImage','.zip','.json'}))
+        artifacts = sorted(p for p in args.dist.iterdir() if p.is_file() and
+                           (p.suffix in {'.AppImage','.zip','.json','.deb','.rpm'} or p.name.endswith('.pkg.tar.zst')))
         (args.dist/'SHA256SUMS').write_text(''.join(digest(p)+'  '+p.name+'\n' for p in artifacts),newline='\n')
 
 

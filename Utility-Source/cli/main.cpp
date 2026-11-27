@@ -9,9 +9,10 @@
 #include "Payload.h"
 
 #include <atomic>
-#include <csignal>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -63,6 +64,11 @@ uint64_t parseSize(const std::string& s) {
 }
 
 std::string exeDir(const char* argv0) {
+#ifdef __linux__
+    std::error_code error;
+    const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error) return executable.parent_path().string();
+#endif
     std::string p = argv0;
     auto i = p.find_last_of("/\\");
     return i == std::string::npos ? "." : p.substr(0, i);

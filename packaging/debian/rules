@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=cmake+ninja --sourcedirectory=Utility-Source --builddirectory=build
+
+override_dh_auto_test:
+	dh_auto_test
+	desktop-file-validate packaging/glassboot.desktop
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/glassboot
+	python3 scripts/release.py stage-native-payload payload debian/glassboot/usr/share/glassboot/payload

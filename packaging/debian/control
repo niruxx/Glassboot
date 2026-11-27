@@ -1,0 +1,17 @@
+Source: glassboot
+Section: utils
+Priority: optional
+Maintainer: Glassboot maintainers <perezkyle98@protonmail.com>
+Build-Depends: debhelper-compat (= 13), cmake, desktop-file-utils, ninja-build,
+ python3, qt6-base-dev, qt6-l10n-tools, qt6-tools-dev
+Rules-Requires-Root: no
+Homepage: https://github.com/niruxx/Glassboot
+
+Package: glassboot
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, e2fsprogs, mount, pkexec,
+ qt6-qpa-plugins, qt6-svg-plugins, qt6-wayland
+Suggests: ntfs-3g, udftools, xfsprogs
+Description: graphical and command-line installer for Glassboot USB drives
+ Glassboot installs and updates multiboot USB drives. This package includes
+ the graphical installer, the command-line utility, and their boot files.

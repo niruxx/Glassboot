@@ -29,6 +29,8 @@
 | 🪟 **Windows x64** | Extract the complete portable ZIP and run `glassboot-installer.exe` from the extracted folder. Approve the Windows elevation prompt. |
 | 🐧 **Linux x86-64** | Make the AppImage executable with `chmod +x Glassboot-*-linux-x86_64.AppImage` and run `./Glassboot-*-linux-x86_64.AppImage`. The installer can restart with elevated permissions when it needs to write the drive. |
 
+Arch Linux, Fedora, and Debian can also install the GUI and CLI through their package managers. See the [native Linux package instructions](docs/RELEASING.md#native-linux-packages).
+
 Build the portable package using the [instructions below](#build-from-source), or use the Windows or Linux artifact from a successful run of the [release workflow](.github/workflows/release.yml). The [release guide](docs/RELEASING.md) covers checksums, signatures, and running the AppImage without FUSE.
 
 > [!CAUTION]
@@ -169,7 +171,7 @@ sudo apt-get install -y libtool-bin libfuse3-dev libzstd-dev squashfs-tools patc
 bash scripts/package-linux.sh
 ```
 
-The AppImage is written to `dist/`. See the [release guide](docs/RELEASING.md) for packaging and the [installer reference](Utility-Source/README.md) for CLI-only builds.
+The AppImage is written to `dist/`. See the [release guide](docs/RELEASING.md#native-linux-packages) for native packaging and the [installer reference](Utility-Source/README.md) for CLI-only builds.
 
 </details>
 

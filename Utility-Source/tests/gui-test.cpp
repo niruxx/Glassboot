@@ -62,6 +62,8 @@ int main(int argc, char** argv) {
     window.show();
     settle();
     const auto available = window.screen()->availableGeometry();
+    if (!available.contains(window.geometry()))
+        qWarning() << "Window geometry" << window.geometry() << "available screen" << available;
     require(available.contains(window.geometry()), "Window exceeds available screen at startup");
     require((window.geometry().center() - available.center()).manhattanLength() <= 4,
             "Window is not centered");

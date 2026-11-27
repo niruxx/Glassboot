@@ -1,10 +1,11 @@
-# Portable builds and Phase 5 validation
+# Release builds and validation
 
 Release outputs go to the repository's ignored `dist/` directory:
 
 * `Glassboot-VERSION-linux-x86_64.AppImage`
 * `Glassboot-VERSION-windows-x86_64.zip`, plus its unpacked portable directory
-* Per-artifact `.sbom.json` (CycloneDX 1.6) and `.provenance.json` files
+* Arch `.pkg.tar.zst`, Fedora `.rpm`, and Debian `.deb` packages
+* Portable package `.sbom.json` (CycloneDX 1.6) and `.provenance.json` files
 * `SHA256SUMS`
 
 The Windows directory contains the GUI, CLI, Qt plugins/libraries, app-local MSVC
@@ -65,9 +66,68 @@ The default Windows build directory is `build/release-windows`. The script uses
 `windeployqt` and copies the MSVC CRT DLLs locally. It verifies the payload before
 packaging and refuses directory/junction escapes during replacement.
 
+## Native Linux packages
+
+Build on the target distribution or in an x86-64 container of that distribution.
+The packages install `glassboot-installer`, `glassboot-cli`, a desktop entry and
+icon, and the verified boot files under `/usr/share/glassboot/payload`. They
+use the distribution's Qt libraries and desktop plugins.
+
+Build the boot payload once using the steps above and make `out/payload/`
+available to each native build. You can pass a different payload directory as
+the second argument to the packaging script. The payload version must match the
+checkout and its files must pass the manifest checks.
+
+<details>
+<summary>Arch Linux x86-64</summary>
+
+```sh
+sudo pacman -Syu --needed base-devel cmake desktop-file-utils e2fsprogs ninja polkit python qt6-base qt6-svg qt6-tools qt6-wayland ttf-dejavu util-linux
+bash scripts/package-native-linux.sh arch
+sudo pacman -U dist/glassboot-*.pkg.tar.zst
+```
+
+Run the build as a regular user, as required by `makepkg`.
+
+</details>
+
+<details>
+<summary>Fedora 44 x86-64</summary>
+
+```sh
+sudo dnf install add-determinism cmake desktop-file-utils gcc gcc-c++ gzip linkdupes ninja-build python3 qt6-qtbase-devel qt6-qttools-devel redhat-rpm-config rpm-build tar
+bash scripts/package-native-linux.sh fedora
+sudo dnf install ./dist/glassboot-*.rpm
+```
+
+</details>
+
+<details>
+<summary>Debian 13 (trixie) amd64</summary>
+
+```sh
+sudo apt install build-essential cmake ninja-build debhelper dpkg-dev fakeroot python3 qt6-base-dev qt6-tools-dev qt6-l10n-tools desktop-file-utils
+bash scripts/package-native-linux.sh debian
+sudo apt install ./dist/glassboot_*.deb
+```
+
+</details>
+
+In a minimal build container, initialize its D-Bus machine ID before running
+the Qt tests. The package build runs CTest, including the GUI tests at three
+display scales. After installation, the following check launches the installed GUI
+offscreen and verifies that the installed CLI can find its payload and create and
+update BIOS and 4Kn GPT disk images.
+
+```sh
+bash Utility-Source/tests/native-package-test.sh "$(python3 scripts/release.py version)"
+python3 scripts/release.py hashes dist
+(cd dist && sha256sum --strict -c SHA256SUMS)
+```
+
 ## Integrity, inventories and signing
 
-`files.sha256` inside each bundle covers its content, including the SBOM and
+`files.sha256` inside each portable bundle covers its content, including the SBOM and
 provenance. Verify an extracted package with:
 
 ```sh
